@@ -1,0 +1,2497 @@
+package components
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"math"
+	"os/signal"
+	"regexp"
+	"strings"
+
+	// "database/sql"
+	"fmt"
+	"io"
+	"math/rand"
+	"strconv"
+	"sync"
+
+	// "sync/atomic"
+	"time"
+
+	"go.uber.org/atomic"
+
+	"image"
+	"image/color"
+
+	//"image/draw"
+	"image/jpeg"
+	"io/ioutil"
+
+	"golang.org/x/image/draw"
+	// "log"
+	"os"
+	"testing"
+
+	"github.com/jmoiron/sqlx"
+	"github.com/pbnjay/pixfont"
+	"google.golang.org/grpc"
+
+	// pigo "github.com/esimov/pigo/core"
+	"github.com/pashanskiy/tnn/components/grpctransport"
+
+	"github.com/disintegration/imaging"
+)
+
+// openDB TEST Инициализирует новую или открывает существующую базу данных
+func openDB() (*sqlx.DB, error) {
+	fileName := "../storage.db" //test
+	_, err := os.Stat(fileName)
+
+	if os.IsNotExist(err) {
+		ofile, _ := os.Open("cleardb")
+		nfile, _ := os.Create("./storage.db")
+		_, _ = io.Copy(nfile, ofile)
+		defer ofile.Close()
+		defer nfile.Close()
+	}
+	return sqlx.Open("sqlite3", fileName)
+}
+
+type photoDBStruct struct {
+	Id         int
+	User_id    int
+	Photo_name string
+	Valid      int
+	// Like_dislike int
+}
+
+type DBphotonnStruct struct {
+	Id           int
+	UserId       int
+	Photo_name   string
+	checked      bool
+	like_dislike int
+}
+
+// type faceDBStruct struct {
+// 	Photo_id    int
+// 	X           int
+// 	Y           int
+// 	Width       int
+// 	Height      int
+// 	NoseX       int
+// 	NoseY       int
+// 	LeftEyeX    int
+// 	LeftEyeY    int
+// 	RightEyeX   int
+// 	RightEyeY   int
+// 	MouthLeftX  int
+// 	MouthLeftY  int
+// 	MouthRightX int
+// 	MouthRightY int
+// 	Confidence  float64
+// }
+
+type faceDB struct {
+	Id            int
+	Photo_id      int
+	X             int
+	Y             int
+	Width         int
+	Height        int
+	Nose_x        int
+	Nose_y        int
+	Left_eye_x    int
+	Left_eye_y    int
+	Right_eye_x   int
+	Right_eye_y   int
+	Mouth_left_x  int
+	Mouth_left_y  int
+	Mouth_right_x int
+	Mouth_right_y int
+	Confidence    float32
+}
+
+type undetectedPhotoStruct struct {
+	PhotoDBId int
+	PhotoName string
+}
+
+type detectedPhotoStruct struct {
+	PhotoId   string
+	PhotoDBId int
+	//Faces     []faceDetectStruct
+	Photo *grpctransport.GetFaceResponse
+}
+
+// func protobufFaceToStruct(f *grpctransport.Face) faceDetectStruct {
+// 	return faceDetectStruct{
+// 		X:           int(f.X),
+// 		Y:           int(f.Y),
+// 		Width:       int(f.Width),
+// 		Height:      int(f.Height),
+// 		NoseX:       int(f.NoseX),
+// 		NoseY:       int(f.NoseY),
+// 		LeftEyeX:    int(f.LeftEyeX),
+// 		LeftEyeY:    int(f.LeftEyeY),
+// 		RightEyeX:   int(f.RightEyeX),
+// 		RightEyeY:   int(f.RightEyeY),
+// 		MouthLeftX:  int(f.MouthLeftX),
+// 		MouthLeftY:  int(f.MouthLeftY),
+// 		MouthRightX: int(f.MouthRightX),
+// 		MouthRightY: int(f.MouthRightY),
+// 		Confidence:  float64(f.Confidence),
+// 	}
+// }
+
+func printResult(photo *grpctransport.GetFaceResponse, index int) {
+	if photo != nil {
+		fmt.Println("\n\r", index+1, "PhotoID:", photo.PhotoId)
+		for index, face := range photo.Faces {
+			fmt.Println("  Face:", index)
+			fmt.Println("   Confidence:  ", face.Confidence)
+			fmt.Println("   XY:          ", face.X, face.Y)
+			fmt.Println("   Width Height:", face.Width, face.Height)
+			fmt.Println("   NoseXY:      ", face.NoseX, face.NoseY)
+			fmt.Println("   LeftEyeXY:   ", face.LeftEyeX, face.LeftEyeY)
+			fmt.Println("   RightEyeXY:  ", face.RightEyeX, face.RightEyeY)
+			fmt.Println("   MouthLeftXY: ", face.MouthLeftX, face.MouthLeftY)
+			fmt.Println("   MouthRightXY:", face.MouthRightX, face.MouthRightY)
+		}
+	} else {
+		fmt.Println("Photo is nil")
+	}
+}
+
+func checkFaceAreaOld(face *grpctransport.Face, area int) bool {
+	faceArea := int(face.Width * face.Height)
+	if faceArea < area {
+		return false
+	} else {
+		return true
+	}
+}
+func checkFaceAreaNew(face *faceDB, area int) bool {
+	faceArea := int(face.Width * face.Height)
+	if faceArea < area {
+		return false
+	} else {
+		return true
+	}
+}
+
+func writeNNPhotoToDB(db *sqlx.DB, photoName string) {
+	row, _ := db.Query("select id from nn_photos where photo_name=$1", photoName)
+	if !row.Next() {
+		_, _ = db.Exec("insert into nn_photos (photo_name) values ($1)", photoName)
+	}
+	row.Close()
+}
+
+// HLine draws a horizontal line
+func DPoint(x, y int, img *image.RGBA, color color.RGBA) {
+	img.Set(x, y, color)
+}
+
+// HLine draws a horizontal line
+func THLine(x1, y, x2 int, img *image.RGBA, color color.RGBA) {
+	for ; x1 <= x2; x1++ {
+		img.Set(x1, y, color)
+	}
+}
+
+// VLine draws a veritcal line
+func TVLine(x, y1, y2 int, img *image.RGBA, color color.RGBA) {
+	for ; y1 <= y2; y1++ {
+		img.Set(x, y1, color)
+	}
+}
+
+// Rect draws a rectangle utilizing HLine() and VLine()
+func TRect(x1, y1, x2, y2 int, img *image.RGBA, color color.RGBA) {
+	THLine(x1, y1, x2, img, color)
+	THLine(x1, y2, x2, img, color)
+	TVLine(x1, y1, y2, img, color)
+	TVLine(x2, y1, y2, img, color)
+}
+
+func testunaryNNPhoto(t *testing.T) {
+	dirPath := "/kek/Downloads/images/"
+
+	// photoName := "IMG_6050.jpeg"
+
+	conn, err := grpc.Dial(":8081", grpc.WithInsecure())
+	if err != nil {
+		checkErr(err)
+	} else {
+		client := grpctransport.NewGrpcServiceNNClient(conn)
+		files, _ := ioutil.ReadDir(dirPath)
+		for _, file := range files {
+			if file.Name()[0] != '.' {
+				photoImg, err := ioutil.ReadFile(dirPath + file.Name())
+				checkErr(err)
+				getFaceRequest := &grpctransport.GetFaceRequest{}
+				getFaceRequest.PhotoId = file.Name()
+				getFaceRequest.PhotoBytes = photoImg
+
+				faceDetect, err := client.GetFace(context.Background(), getFaceRequest)
+				checkErr(err)
+				DrawImageBoxAndSave(faceDetect, true, dirPath, dirPath)
+				printResult(faceDetect, 0)
+			}
+		}
+	}
+}
+
+func DrawImageBoxAndSave(faces *grpctransport.GetFaceResponse, drawPieces bool, loadDir string, saveDir string) {
+	file, err := ioutil.ReadFile(loadDir + faces.PhotoId)
+	checkErr(err)
+	srcimg, _, err := image.Decode(bytes.NewReader(file))
+	checkErr(err)
+
+	fileName := strings.Split(faces.PhotoId, ".")
+
+	b := srcimg.Bounds()
+	image := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(image, image.Bounds(), srcimg, b.Min, draw.Src)
+	srcimg = nil
+
+	for index, face := range faces.Faces {
+		faceX1 := int(face.X)
+		faceY1 := int(face.Y)
+		faceX2 := int(face.X + face.Width)
+		faceY2 := int(face.Y + face.Height)
+
+		faceDb := faceDB{
+			X:             int(face.X),
+			Y:             int(face.Y),
+			Width:         int(face.Width),
+			Height:        int(face.Height),
+			Nose_x:        int(face.NoseX),
+			Nose_y:        int(face.NoseY),
+			Left_eye_x:    int(face.LeftEyeX),
+			Left_eye_y:    int(face.LeftEyeY),
+			Right_eye_x:   int(face.RightEyeX),
+			Right_eye_y:   int(face.RightEyeY),
+			Mouth_left_x:  int(face.MouthLeftX),
+			Mouth_left_y:  int(face.MouthLeftY),
+			Mouth_right_x: int(face.MouthRightX),
+			Mouth_right_y: int(face.MouthRightY),
+			Confidence:    face.Confidence}
+
+		imageCopy := *image
+		checkErr(ioutil.WriteFile(saveDir+fileName[0]+"_Face_"+strconv.Itoa(index)+"_CUT_."+fileName[1], CutPhotoAndRotate(faceDb, &imageCopy), 0644))
+
+		if drawPieces {
+			pixfont.DrawString(image, int(face.NoseX)-4, int(face.NoseY)-4, "N", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(image, int(face.LeftEyeX)-4, int(face.LeftEyeY)-4, "E", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(image, int(face.RightEyeX)-4, int(face.RightEyeY)-4, "E", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(image, int(face.MouthLeftX)-4, int(face.MouthLeftY)-4, "M", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(image, int(face.MouthRightX)-4, int(face.MouthRightY)-4, "M", color.RGBA{0, 255, 0, 255})
+		}
+
+		Rect(faceX1, faceY1, faceX2, faceY2, image)
+
+		//pixfont.DrawString(image, faceX1+5, faceY2+5, "face: " + fmt.Sprintf("%f", face.Confidence)[0:4] , color.RGBA{0, 255, 0, 255})
+		pixfont.DrawString(image, faceX1+5, faceY2+5, "face: "+fmt.Sprintf("%f", face.Confidence), color.RGBA{0, 255, 0, 255})
+
+	}
+	// f, err := os.Create(saveDir + strconv.Itoa(len(faces.Faces)) + "NN_" + faces.PhotoId)
+
+	area := int(faces.Faces[0].Width * faces.Faces[0].Height)
+	f, err := os.Create(saveDir + fileName[0] + "_area_" + strconv.Itoa(area) + "_NN_." + fileName[1])
+	//f, err := os.Create(saveDir + strconv.Itoa(len(faces.Faces)) + "_" + strconv.Itoa(int(faces.Faces[0].X)) + "_" + strconv.Itoa(int(faces.Faces[0].Y)) + "_" + strconv.Itoa(int(faces.Faces[0].Width)) + "_" + strconv.Itoa(int(faces.Faces[0].Height)) + "_NN_" + faces.PhotoId)
+
+	checkErr(err)
+	err = jpeg.Encode(f, image, &jpeg.Options{Quality: 100})
+	checkErr(err)
+	f.Close()
+}
+
+func GetFaceFromImage(dirPath string, client grpctransport.GrpcServiceNNClient, undetectedPhotoChan chan undetectedPhotoStruct, detectedPhotoChan chan detectedPhotoStruct, mutex *sync.Mutex) {
+	work := true
+	for work {
+		mutex.Lock()
+		undetectedPhoto, work := <-undetectedPhotoChan
+		mutex.Unlock()
+		if work {
+			file, err := ioutil.ReadFile(dirPath + undetectedPhoto.PhotoName)
+			checkErr(err)
+			getFaceRequest := &grpctransport.GetFaceRequest{}
+			getFaceRequest.PhotoId = undetectedPhoto.PhotoName
+			getFaceRequest.PhotoBytes = file
+
+			faceDetect, err := client.GetFace(context.Background(), getFaceRequest)
+			if !checkErr(err) {
+				fmt.Println("Photo is nil")
+				time.Sleep(1 * time.Second)
+			}
+			mutex.Lock()
+			detectedPhotoChan <- detectedPhotoStruct{PhotoId: undetectedPhoto.PhotoName, PhotoDBId: undetectedPhoto.PhotoDBId, Photo: faceDetect}
+			mutex.Unlock()
+
+			// if err != nil {
+			// 	check(err)
+			// } else {
+			// 	DrawImageBoxAndSave(file, faceDetect, "../resources/photos/picFace/NN_"+faceDetect.PhotoId)
+			// }
+		}
+	}
+}
+
+func testfaceNN(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	conn, err := grpc.Dial(":8081", grpc.WithInsecure())
+	if err != nil {
+		checkErr(err)
+	} else {
+		client := grpctransport.NewGrpcServiceNNClient(conn)
+		dirPath := "../resources/photos/640x800/"
+		//files, err := ioutil.ReadDir(dirPath)
+
+		//nnps - NNPhotoStruct
+		nnps := DBphotonnStruct{}
+		var countOfPhotos int
+		//countOfPhotosRow := db.QueryRow("select count(id) from nn_photos where checked=$1", 0)
+		countOfPhotosRow := db.QueryRow("select count(id) from nn_photos where checked=$1", 1)
+		countOfPhotosRow.Scan(&countOfPhotos)
+
+		countOfDetect := countOfPhotos //100 //len(files)
+		detectedPhotoChan := make(chan detectedPhotoStruct, countOfDetect)
+		photoChan := make(chan undetectedPhotoStruct, countOfDetect)
+
+		//photoRow, err := db.Query("select * from nn_photos where checked=$1", 0)
+		photoRow, err := db.Query("select * from nn_photos where checked=$1", 1)
+		checkErr(err)
+
+		for photoRow.Next() {
+			_ = photoRow.Scan(&nnps.Id, &nnps.UserId, &nnps.Photo_name, &nnps.checked, &nnps.like_dislike)
+			if countOfDetect == len(photoChan) {
+				break
+			}
+			photoChan <- undetectedPhotoStruct{PhotoDBId: nnps.Id, PhotoName: nnps.Photo_name}
+		}
+		photoRow.Close()
+		close(photoChan)
+
+		var mutex = &sync.Mutex{}
+		goroutinesCount := 1
+		for i := 0; i < goroutinesCount; i++ {
+			go GetFaceFromImage(dirPath, client, photoChan, detectedPhotoChan, mutex)
+		}
+
+		// var query string = `insert into detected_face (
+		// 	photo_id, x, y, width, height, nose_x,
+		// 	nose_y, left_eye_x, left_eye_y, right_eye_x,
+		// 	right_eye_y, mouth_left_x, mouth_left_y,
+		// 	mouth_right_x, mouth_right_y, confidence
+		// )
+		// values
+		// 	(
+		// 		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+		// 		$11, $12, $13, $14, $15, $16
+		// 	)`
+
+		for i := 0; i < countOfDetect; i++ {
+			dp := <-detectedPhotoChan
+			//for _, f := range dp.Photo.Faces {
+			// 	_, _ = db.Exec(
+			// 		query, dp.PhotoDBId, f.X, f.Y, f.Width, f.Height,
+			// 		f.NoseX, f.NoseY, f.LeftEyeX, f.LeftEyeY, f.RightEyeX,
+			// 		f.LeftEyeY, f.MouthLeftX, f.MouthLeftY, f.MouthRightX,
+			// 		f.MouthRightY, f.Confidence)
+			// }
+			// _, _ = db.Exec("update nn_photos set checked=$1 where id=$2", 1, dp.PhotoDBId)
+			printResult(dp.Photo, i)
+		}
+	}
+	defer conn.Close()
+}
+
+func testforceWritePhotosToDB(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	dirPath := "../resources/photos/640x800/"
+	files, err := ioutil.ReadDir(dirPath)
+	checkErr(err)
+	for index, file := range files {
+		writeNNPhotoToDB(db, file.Name())
+		fmt.Println("Photo writed:", index, file.Name())
+	}
+}
+
+type photoNameIdStruct struct {
+	Id         int
+	Photo_name string
+}
+
+func testdrawPhotosFromDB(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+
+	loadDir := "../resources/NNDataSetPhotos/"
+	saveDir := "/kek/Desktop/testPic/"
+
+	var photoArrFromDB []photoNameIdStruct
+	checkErr(db.Select(&photoArrFromDB, "select id, photo_name from nn_photos where valid=1"))
+	checkErr(err)
+	faceQuery := `select id, x, y, width, height, nose_x, nose_y, left_eye_x, 
+	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x, 
+	mouth_right_y, confidence from detected_faces where photo_id=$1`
+	for _, photoNameId := range photoArrFromDB {
+
+		var faceRow faceDB
+		checkErr(db.Get(&faceRow, faceQuery, photoNameId.Id))
+		DrawImageBoxAndSaveUnary(faceRow, photoNameId.Photo_name, true, loadDir, saveDir)
+
+		fmt.Println("Photo index:", photoNameId.Id)
+	}
+}
+
+func DrawImageBoxAndSaveUnary(face faceDB, photoName string, drawPieces bool, loadDir, saveDir string) {
+	file, err := ioutil.ReadFile(loadDir + photoName)
+	checkErr(err)
+	srcimg, _, err := image.Decode(bytes.NewReader(file))
+	if checkErr(err) {
+
+		b := srcimg.Bounds()
+		img := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+		draw.Draw(img, img.Bounds(), srcimg, b.Min, draw.Src)
+		srcimg = nil
+
+		if drawPieces {
+			pixfont.DrawString(img, int(face.Nose_x)-4, int(face.Nose_y)-4, "N", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, int(face.Left_eye_x)-4, int(face.Left_eye_y)-4, "E", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, int(face.Right_eye_x)-4, int(face.Right_eye_y)-4, "E", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, int(face.Mouth_left_x)-4, int(face.Mouth_left_y)-4, "M", color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, int(face.Mouth_right_x)-4, int(face.Mouth_right_y)-4, "M", color.RGBA{0, 255, 0, 255})
+
+			faceX1 := int(face.X)
+			faceY1 := int(face.Y)
+			faceX2 := int(face.X + face.Width)
+			faceY2 := int(face.Y + face.Height)
+			TRect(faceX1, faceY1, faceX2, faceY2, img, color.RGBA{0, 255, 0, 255})
+
+			// var bigSide int
+			// if face.Width < face.Height {
+			// 	bigSide = int(face.Height)
+			// } else {
+			// 	bigSide = int(face.Width)
+			// }
+			// bigSide += bigSide / 100 * 30
+
+			// var diffF image.Point
+			// if bigSide == int(face.Width)/100*30 {
+			// 	diffF.X = int(face.X) + bigSide/2
+			// 	diffF.Y = int(face.Y) - (bigSide-int(face.Height))/2 + bigSide/2
+			// } else {
+			// 	diffF.X = int(face.X) - (bigSide-int(face.Width))/2
+			// 	diffF.Y = int(face.Y)
+			// }
+			// diffF.Y -= bigSide / 100 * 20
+
+			// pixfont.DrawString(img, 5, img.Bounds().Max.Y-120, "BIGSIDE diffF.X: "+strconv.Itoa(diffF.X)+"  diffF.Y: "+strconv.Itoa(diffF.Y)+"  BigSide: "+strconv.Itoa(bigSide), color.RGBA{0, 255, 0, 255})
+			// TRect(diffF.X, diffF.Y, diffF.X+bigSide, diffF.Y+bigSide, img, color.RGBA{255, 0, 0, 255})
+
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-100, "Face: "+fmt.Sprintf("%f", face.Confidence), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-90, "Eye left   X: "+strconv.Itoa(face.Left_eye_x)+"  Y: "+strconv.Itoa(face.Left_eye_y), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-80, "Eye right  X: "+strconv.Itoa(face.Right_eye_x)+"  Y: "+strconv.Itoa(face.Right_eye_y), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-70, "Nose       X: "+strconv.Itoa(face.Nose_x)+"  Y: "+strconv.Itoa(face.Nose_y), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-60, "Mouth left X: "+strconv.Itoa(face.Mouth_left_x)+"  Y: "+strconv.Itoa(face.Mouth_left_y), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-50, "Eyes R-L   X: "+strconv.Itoa(face.Right_eye_x)+"-"+strconv.Itoa(face.Left_eye_x)+"="+strconv.Itoa(face.Right_eye_x-face.Left_eye_x), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-40, "Eyes R-L   Y: "+strconv.Itoa(face.Right_eye_y)+"-"+strconv.Itoa(face.Left_eye_y)+"="+strconv.Itoa(face.Right_eye_y-face.Left_eye_y), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-30, "Mouth left X: "+strconv.Itoa(face.Mouth_left_x)+"  Y: "+strconv.Itoa(face.Mouth_left_y), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-20, "Box        X: "+strconv.Itoa(face.X)+"  Width: "+strconv.Itoa(face.Width), color.RGBA{0, 255, 0, 255})
+			pixfont.DrawString(img, 5, img.Bounds().Max.Y-10, "Box        Y: "+strconv.Itoa(face.Y)+"  Height: "+strconv.Itoa(face.Height), color.RGBA{0, 255, 0, 255})
+		}
+
+		// Rect(faceX1, faceY1, faceX2, faceY2, image)
+
+		//pixfont.DrawString(image, faceX1+5, faceY2+5, "face: " + fmt.Sprintf("%f", face.Confidence)[0:4] , color.RGBA{0, 255, 0, 255})
+		// pixfont.DrawString(image, faceX1+5, faceY2+5, "face: "+fmt.Sprintf("%f", face.Confidence), color.RGBA{0, 255, 0, 255})
+
+		// SaveDatasetRotate(face, image, photoName)
+
+		// area := int(face.Width * face.Height)
+		f, err := os.Create(saveDir + "_NN_" + photoName)
+
+		checkErr(err)
+		err = jpeg.Encode(f, img, &jpeg.Options{Quality: 100})
+		checkErr(err)
+		f.Close()
+	} else {
+		fmt.Println("ERROR Photo Name:", photoName)
+	}
+}
+
+//ПЕРЕПИСАТЬ СВЯЗЬ С БД
+// func testnetStatOld(t *testing.T) {
+// 	db, err := openDB()
+// 	checkErr(err)
+// 	var countOfCheckedPhotos int
+
+// 	cPRow := db.QueryRow("select count(id) from nn_photos where checked=$1 or checked=$2 or checked=$3", 0, 1, 2)
+// 	cPRow.Scan(&countOfCheckedPhotos)
+
+// 	photoRow, err := db.Query("select * from nn_photos where checked=$1 or checked=$2 or checked=$3", 0, 1, 2)
+// 	checkErr(err)
+// 	faceQuery := `select x, y, width, height, nose_x, nose_y, left_eye_x,
+// 	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x,
+// 	mouth_right_y, confidence from detected_faces where photo_id=$1`
+
+// 	faceCountMap := make(map[int]int)
+// 	facePercentMap := make(map[string]int)
+
+// 	face1PercentMap := make(map[string]int)
+
+// 	faceAreaMap := make(map[string]int)
+
+// 	for photoRow.Next() {
+// 		pdbs := photoDBStruct{}
+// 		gfr := &grpctransport.GetFaceResponse{}
+// 		//clear(gfr)
+// 		//fmt.Println("kek", gfr)
+// 		_ = photoRow.Scan(&pdbs.Id, &pdbs.User_id, &pdbs.Photo_name, &pdbs.Checked, &pdbs.Like_dislike)
+// 		faceRow, err := db.Query(faceQuery, pdbs.Id)
+// 		checkErr(err)
+// 		for faceRow.Next() {
+// 			f := grpctransport.Face{}
+// 			_ = faceRow.Scan(
+// 				&f.X, &f.Y, &f.Width, &f.Height, &f.NoseX, &f.NoseY,
+// 				&f.LeftEyeX, &f.LeftEyeY, &f.RightEyeX, &f.RightEyeY,
+// 				&f.MouthLeftX, &f.MouthLeftY, &f.MouthRightX, &f.MouthRightY, &f.Confidence,
+// 			)
+// 			if checkFaceAreaOld(&f, 3000) {
+// 				gfr.PhotoId = pdbs.Photo_name
+// 				gfr.Faces = append(gfr.Faces, &f)
+// 				facePercentMap[fmt.Sprintf("%f", f.Confidence)[0:4]]++
+// 				faceAreaMap["approved"]++
+// 			} else {
+// 				faceAreaMap["rejected"]++
+// 			}
+// 		}
+// 		faceCountMap[len(gfr.Faces)]++
+// 		if len(gfr.Faces) == 1 {
+// 			for _, f := range gfr.Faces {
+// 				face1PercentMap[fmt.Sprintf("%f", f.Confidence)[0:4]]++
+// 				if f.Confidence < 0.90 {
+// 					face1PercentMap["<0.90"]++
+// 				} else {
+// 					face1PercentMap[">=0.90"]++
+// 				}
+// 			}
+// 		}
+
+// 		faceRow.Close()
+// 	}
+// 	photoRow.Close()
+
+// 	fmt.Println("Count all:", countOfCheckedPhotos)
+
+// 	for count, faceCount := range faceCountMap {
+// 		fmt.Println("Faces Count:", count, " ", int(float64(faceCount)/float64(countOfCheckedPhotos)*100), "%", " Count:", faceCount)
+// 	}
+// 	fmt.Println()
+// 	for percent, count := range facePercentMap {
+// 		fmt.Println("Face: Confidence: ", percent, " ", int(float64(count)/float64(countOfCheckedPhotos)*100), "%", " Count:", count)
+// 	}
+// 	fmt.Println()
+// 	fmt.Println("Approved:", faceAreaMap["approved"], " Rejected:", faceAreaMap["rejected"])
+// 	fmt.Println()
+// 	fmt.Println("1 Face Count: ", int(float64(faceCountMap[1])/float64(countOfCheckedPhotos)*100), "%", " Count:", faceCountMap[1])
+// 	for percent, count := range face1PercentMap {
+// 		fmt.Println("1 Face: Confidence: ", percent, " ", int(float64(count)/float64(faceCountMap[1])*100), "%", " Count:", count)
+// 	}
+// }
+
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+
+func testGetRawDataSet(t *testing.T) {
+	loadDir := "../resources/NNDataSetPhotos/"
+	saveDir := "../facedetect/testNetworks/faceDSRAW/"
+
+	regex, _ := regexp.Compile(`^[a-f0-9]{24}_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_\d+x\d+.(webp|jpg)$`)
+	db, err := openDB()
+	checkErr(err)
+	var pnla []photoNameAndLikeStruct
+	//var allLikePhotosConut int
+	//var allDislikePhotosConut int
+	//check(db.Get(&allLikePhotosConut, "SELECT count(like) FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where like = 1 and valid = 1"))
+	//check(db.Get(&allDislikePhotosConut, "SELECT count(like) FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where like = 0 and valid = 1"))
+	checkErr(db.Select(&pnla, "SELECT photo_name, nn_photos.id, user_like FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where user_like is not NULL and valid = 1"))
+
+	cp := 0
+	var likePhotosConut int
+	var dislikePhotosConut int
+	for _, pnl := range pnla {
+
+		var saveDirName string
+		if pnl.User_like {
+			likePhotosConut++
+			saveDirName = saveDir + "like/"
+		} else {
+			dislikePhotosConut++
+			saveDirName = saveDir + "dislike/"
+		}
+		saveDirName += strconv.Itoa(pnl.Id) + ".jpg"
+		// SaveDataset(gfr.Faces[0], pnl.Photo_name, loadDir, saveDirName)
+		photoFile, err := ioutil.ReadFile(loadDir + pnl.Photo_name)
+		// photoImage, _, err := image.Decode(bytes.NewReader(photoFile))
+		// fmt.Println("regex.FindStringSubmatch(pnl.Photo_name)", regex.FindStringSubmatch(pnl.Photo_name), pnl.Photo_name)
+		photoImage, err := decodePhoto(photoFile, regex.FindStringSubmatch(pnl.Photo_name)[1])
+		checkErr(err)
+		// src := ...image to be converted...
+		if photoImage != nil {
+			if photoImage.Bounds().Max.X == 640 && photoImage.Bounds().Max.Y == 800 {
+
+				dst := image.NewRGBA(image.Rect(0, 0, 160, 200))
+				draw.NearestNeighbor.Scale(dst, dst.Rect, photoImage, photoImage.Bounds(), draw.Over, nil)
+				f, err := os.Create(saveDirName)
+				checkErr(err)
+				err = jpeg.Encode(f, dst, &jpeg.Options{Quality: 100})
+				checkErr(err)
+				f.Close()
+				cp++
+				fmt.Println("DS PhotoID:", pnl.Id)
+			} else {
+				fmt.Println("ERR: Photo is not 640x800")
+			}
+		} else {
+			fmt.Println("ERROR:", pnl.Photo_name)
+		}
+	}
+	fmt.Println("Count of photos:", cp)
+}
+
+type photoNameAndLikeStruct struct {
+	Photo_name string
+	Id         int
+	User_like  bool
+}
+
+func testGetDataSet(t *testing.T) {
+	loadDir := "../resources/NNDataSetPhotos/"
+	// saveDir := "../facedetect/testNetworks/faceDS64/"
+	saveDir := "/kek/Desktop/trashPhotos128err/"
+
+	regex, _ := regexp.Compile(`^[a-f0-9]{24}_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_\d+x\d+.(webp|jpg)$`)
+	// db, err := openDB()
+	db, err := sqlx.Open("sqlite3", "/kek/golang/src/github.com/pashanskiy/tnn/storage — копия 2.db")
+	checkErr(err)
+	var pnla []photoNameAndLikeStruct
+	//var allLikePhotosConut int
+	//var allDislikePhotosConut int
+	//check(db.Get(&allLikePhotosConut, "SELECT count(like) FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where like = 1 and valid = 1"))
+	//check(db.Get(&allDislikePhotosConut, "SELECT count(like) FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where like = 0 and valid = 1"))
+	checkErr(db.Select(&pnla, "SELECT photo_name, nn_photos.id, user_like FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where user_like is not NULL and valid = 1"))
+	faceQuery := `select id, x, y, width, height, nose_x, nose_y, left_eye_x, 
+	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x, 
+	mouth_right_y, confidence from detected_faces where photo_id=$1`
+	cp := 0
+	var likePhotosConut int
+	var dislikePhotosConut int
+	for _, pnl := range pnla {
+		// gfr := &grpctransport.GetFaceResponse{}
+		face := faceDB{}
+		checkErr(db.Get(&face, faceQuery, pnl.Id))
+		checkErr(err)
+
+		var saveDirName string
+		saveDirName = saveDir
+		if pnl.User_like {
+			likePhotosConut++
+			// saveDirName = saveDir + "like/"
+		} else {
+			dislikePhotosConut++
+			// saveDirName = saveDir + "dislike/"
+		}
+		saveDirName += "m_" + strconv.Itoa(pnl.Id) + ".jpg"
+		// SaveDataset(gfr.Faces[0], pnl.Photo_name, loadDir, saveDirName)
+		photoFile, err := ioutil.ReadFile(loadDir + pnl.Photo_name)
+		// photoImage, _, err := image.Decode(bytes.NewReader(photoFile))
+		// fmt.Println("regex.FindStringSubmatch(pnl.Photo_name)", regex.FindStringSubmatch(pnl.Photo_name), pnl.Photo_name)
+		photoImage, err := decodePhoto(photoFile, regex.FindStringSubmatch(pnl.Photo_name)[1])
+
+		checkErr(err)
+		// src := ...image to be converted...
+		if photoImage != nil {
+			photoRGBA := image.NewRGBA(image.Rect(0, 0, photoImage.Bounds().Dx(), photoImage.Bounds().Dy()))
+			draw.Draw(photoRGBA, photoRGBA.Bounds(), photoImage, photoImage.Bounds().Min, draw.Src)
+			photoImage = nil
+
+			checkErr(ioutil.WriteFile(saveDirName, CutPhotoAndRotate(face, photoRGBA), 0644))
+
+			cp++
+			fmt.Println("DS PhotoID:", pnl.Id)
+		} else {
+			fmt.Println("ERROR:", pnl.Photo_name)
+		}
+	}
+	fmt.Println("Count of photos:", cp)
+}
+
+func SaveDataset(face *grpctransport.Face, photoName, loadDir, saveDir string) {
+	scalePX := 64
+	//saveName := ""
+	// if photoLike {
+	// 	saveName = saveDir + "like_" + strconv.Itoa(photoId) + ".jpg"
+	// } else {
+	// 	saveName = saveDir + "dislike_" + strconv.Itoa(photoId) + ".jpg"
+	// }
+	var bigSide int
+	if face.Width < face.Height {
+		bigSide = int(face.Height)
+	} else {
+		bigSide = int(face.Width)
+	}
+	file, err := ioutil.ReadFile(loadDir + photoName)
+	checkErr(err)
+	srcimg, _, err := image.Decode(bytes.NewReader(file))
+	checkErr(err)
+	var diffF image.Point
+	if bigSide == int(face.Width) {
+		diffF.X = int(face.X)
+		diffF.Y = int(face.Y) - (bigSide-int(face.Height))/2
+	} else {
+		diffF.X = int(face.X) - (bigSide-int(face.Width))/2
+		diffF.Y = int(face.Y)
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, bigSide, bigSide))
+	draw.Draw(img, img.Rect, srcimg, diffF, draw.Src)
+
+	dst := image.NewRGBA(image.Rect(0, 0, scalePX, scalePX))
+	draw.NearestNeighbor.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
+	img = nil
+
+	// imageToGrayScale
+	// for y := dst.Bounds().Min.Y; y < dst.Bounds().Max.Y; y++ {
+	// 	for x := dst.Bounds().Min.X; x < dst.Bounds().Max.X; x++ {
+	// 		R, G, B, _ := dst.At(x, y).RGBA()
+	// 		//Luma: Y = 0.2126*R + 0.7152*G + 0.0722*B
+	// 		//Y := (0.2126*float64(R) + 0.7152*float64(G) + 0.0722*float64(B)) * (255.0 / 65535)
+
+	// 		Y := (float64(R+G+B) / 3) * (255.0 / 65535)
+
+	// 		grayPix := color.Gray{uint8(Y)}
+	// 		dst.Set(x, y, grayPix)
+	// 	}
+	// }
+
+	f, err := os.Create(saveDir)
+	checkErr(err)
+	err = jpeg.Encode(f, dst, &jpeg.Options{Quality: 100})
+	//err = bmp.Encode(f, dst)
+	checkErr(err)
+	f.Close()
+}
+
+func CutPhotoAndRotate(face faceDB, photoImage *image.RGBA) []byte {
+	scalePX := 128
+	var bigSide int
+	if face.Width < face.Height {
+		bigSide = face.Height
+	} else {
+		bigSide = face.Width
+	}
+	bigSide += bigSide / 100 * 30
+	var radianAngle float64
+	if face.Mouth_left_y < face.Mouth_right_y {
+		radianAngle = math.Atan(float64(face.Mouth_right_y-face.Mouth_left_y) / float64(face.Mouth_right_x-face.Mouth_left_x))
+	} else {
+		radianAngle = -math.Atan(float64(face.Mouth_left_y-face.Mouth_right_y) / float64(face.Mouth_right_x-face.Mouth_left_x))
+	}
+	imgR := imaging.Rotate(photoImage, radianAngle*(180/3.14159265359), color.Black)
+	imgOCenterX := photoImage.Rect.Max.X / 2
+	imgOCenterY := photoImage.Rect.Max.Y / 2
+	imgRCenterX := imgR.Rect.Max.X / 2
+	imgRCenterY := imgR.Rect.Max.Y / 2
+	img := image.NewRGBA(image.Rect(0, 0, bigSide, bigSide))
+
+	var diffF image.Point
+	if bigSide == face.Width/100*30 {
+		diffF.X = face.X + bigSide/2
+		diffF.Y = face.Y - (bigSide-face.Height)/2 + bigSide/2
+	} else {
+		diffF.X = face.X - (bigSide-face.Width)/2 + bigSide/2
+		diffF.Y = face.Y + bigSide/2
+	}
+	diffF.Y -= bigSide / 100 * 30 / 2
+	// fmt.Println(face.Y + bigSide/2, diffF.Y - bigSide/100*20)
+
+	originalImgFaceSquareAngle := math.Atan2(float64(diffF.Y-imgOCenterY)+0.5, float64(diffF.X-imgOCenterX)+0.5)
+	radius := math.Sqrt(math.Pow(float64(diffF.X-photoImage.Rect.Max.X/2), 2) + math.Pow(float64(diffF.Y-photoImage.Rect.Max.Y/2), 2))
+	var diffF3 image.Point
+	diffF3.X = int(radius*math.Cos(originalImgFaceSquareAngle-radianAngle)) + imgRCenterX - bigSide/2
+	diffF3.Y = int(radius*math.Sin(originalImgFaceSquareAngle-radianAngle)) + imgRCenterY - bigSide/2
+	draw.Draw(img, img.Rect, imgR, diffF3, draw.Src)
+	dst := image.NewRGBA(image.Rect(0, 0, scalePX, scalePX))
+	draw.NearestNeighbor.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
+	img = nil
+
+	buf := new(bytes.Buffer)
+	// f, err := os.Create(saveDirName)
+	// checkErr(err)
+	err := jpeg.Encode(buf, dst, &jpeg.Options{Quality: 100})
+	checkErr(err)
+	// f.Close()
+	return buf.Bytes()
+}
+
+// func SaveDatasetRotate(face faceDB, photoImage *image.RGBA, photoName string) {
+// 	fmt.Println(photoName)
+// 	scalePX := 256
+// 	//saveName := ""
+// 	// if photoLike {
+// 	// 	saveName = saveDir + "like_" + strconv.Itoa(photoId) + ".jpg"
+// 	// } else {
+// 	// 	saveName = saveDir + "dislike_" + strconv.Itoa(photoId) + ".jpg"
+// 	// }
+// 	var bigSide int
+// 	if face.Width < face.Height {
+// 		bigSide = face.Height
+// 	} else {
+// 		bigSide = face.Width
+// 	}
+
+// 	var radianAngle float64
+// 	if face.Mouth_left_y < face.Mouth_right_y {
+
+// 		radianAngle = math.Atan(float64(face.Mouth_right_y - face.Mouth_left_y) / float64(face.Mouth_right_x - face.Mouth_left_x))
+// 	} else {
+
+// 		radianAngle = -math.Atan(float64(face.Mouth_left_y - face.Mouth_right_y) / float64(face.Mouth_right_x - face.Mouth_left_x))
+// 	}
+
+// 	  //  radianAngle=0
+
+// 	fmt.Println("radianAngle:", radianAngle, "Angle:", radianAngle * (180/3.14159265359))
+
+// 	imgR := imaging.Rotate(photoImage, radianAngle * (180/3.14159265359), color.Black)
+
+// 	imgOCenterX := photoImage.Rect.Max.X/2
+// 	imgOCenterY := photoImage.Rect.Max.Y/2
+// 	imgRCenterX := imgR.Rect.Max.X/2
+// 	imgRCenterY := imgR.Rect.Max.Y/2
+// 	img := image.NewRGBA(image.Rect(0, 0, bigSide, bigSide))
+
+// 	var diffF image.Point
+// 	if bigSide == face.Width {
+// 		diffF.X = face.X + bigSide/2
+// 		diffF.Y = face.Y - (bigSide-face.Height)/2 + bigSide/2
+// 	} else {
+// 		diffF.X = face.X - (bigSide-face.Width)/2 + bigSide/2
+// 		diffF.Y = face.Y + bigSide/2
+// 	}
+
+// 	originalImgFaceSquareAngle := math.Atan2(float64(diffF.Y - imgOCenterY)+0.5, float64(diffF.X - imgOCenterX)+0.5)
+// 	fmt.Println("radianOriginalImgFaceSquareAngle", originalImgFaceSquareAngle, "originalImgFaceSquareAngle:", originalImgFaceSquareAngle * (180/3.14159265359))
+
+// 	// var diffF2 image.Point
+// 	// if bigSide == face.Width {
+// 	// 	diffF2.X = (imgR.Rect.Max.X - photoImage.Rect.Max.X)/2 + face.X
+// 	// 	diffF2.Y = (imgR.Rect.Max.Y - photoImage.Rect.Max.Y)/2 + face.Y - (bigSide-face.Height)/2
+// 	// } else {
+// 	// 	diffF2.X = int(xM * float32(face.X - (bigSide-face.Width)/2))
+// 	// 	diffF2.Y = int(yM * float32(face.Y))
+// 	// }
+
+// 	radius := math.Sqrt(math.Pow(float64(diffF.X - photoImage.Rect.Max.X/2), 2) + math.Pow(float64(diffF.Y - photoImage.Rect.Max.Y/2), 2))
+
+// 	fmt.Println("radius", radius)
+// 	var diffF3 image.Point
+
+// 		testOIFSA := originalImgFaceSquareAngle
+
+// 	 for testOIFSA < 6.2831853072 {
+// 	//  radianAngle+=0.10
+// 	diffF3.X = int(radius * math.Cos(testOIFSA - radianAngle)) + imgRCenterX
+// 	diffF3.Y = int(radius * math.Sin(testOIFSA - radianAngle)) + imgRCenterY
+// 	if testOIFSA == originalImgFaceSquareAngle {
+// 	pixfont.DrawString(imgR, diffF3.X-4, diffF3.Y-4, strconv.Itoa(int((testOIFSA - radianAngle) * (180/3.14159265359))), color.RGBA{0, 255, 0, 255})
+// 	} else {
+// 		pixfont.DrawString(imgR, diffF3.X-4, diffF3.Y-4, strconv.Itoa(int((testOIFSA - radianAngle) * (180/3.14159265359))), color.RGBA{255, 0, 0, 255})
+
+// 	}
+// 	testOIFSA+=.2
+// 	 }
+
+// 	 diffF3.X = int(radius * math.Cos(originalImgFaceSquareAngle - radianAngle)) + imgRCenterX - bigSide/2
+// 	 diffF3.Y = int(radius * math.Sin(originalImgFaceSquareAngle - radianAngle)) + imgRCenterY - bigSide/2
+
+// 	fmt.Println("cos", math.Cos(radianAngle))
+// 	fmt.Println("sin", math.Sin(radianAngle))
+// 	fmt.Println("diff:", diffF)
+// 	// fmt.Println("diff2:", diffF2)
+// 	fmt.Println("diff3", diffF3)
+
+// 	draw.Draw(img, img.Rect, imgR, diffF3, draw.Src)
+
+// 	// draw.Draw(img, image.Rect(img.Rect.Min.X + imgR.Rect.Min.X, img.Rect.Min.Y + imgR.Rect.Min.Y, img.Rect.Max.X + imgR.Rect.Max.X, img.Rect.Max.Y + imgR.Rect.Max.Y), imgR, diffF, draw.Src)
+
+// 	dst := image.NewRGBA(image.Rect(0, 0, scalePX, scalePX))
+// 	draw.NearestNeighbor.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
+// 	img = nil
+// 	if face.Mouth_left_y < face.Mouth_right_y {
+// 	pixfont.DrawString(dst, 10, 10, "KEK" , color.RGBA{0, 255, 0, 255})
+// 	} else {
+// 		pixfont.DrawString(dst, 10, 10, "SESSSSSS" , color.RGBA{0, 255, 0, 255})
+
+// 	}
+// 	saveDir := "../resources/picFace/"
+// 	f, err := os.Create(saveDir + photoName)
+// 	check(err)
+// 	err = jpeg.Encode(f, dst, &jpeg.Options{Quality: 100})
+// 	//err = bmp.Encode(f, dst)
+// 	check(err)
+// 	f.Close()
+
+// 	f2, err := os.Create(saveDir + "R" + photoName)
+// 	check(err)
+// 	err = jpeg.Encode(f2, imgR, &jpeg.Options{Quality: 100})
+// 	//err = bmp.Encode(f, dst)
+// 	check(err)
+// 	f2.Close()
+
+// 	f3, err := os.Create(saveDir + "O" + photoName)
+// 	check(err)
+// 	err = jpeg.Encode(f3, photoImage, &jpeg.Options{Quality: 100})
+// 	//err = bmp.Encode(f, dst)
+// 	check(err)
+// 	f3.Close()
+// }
+
+// func SaveDatasetRotate(face faceDB, photoImage *image.RGBA, photoName string) {
+// 	scalePX := 256
+// 	//saveName := ""
+// 	// if photoLike {
+// 	// 	saveName = saveDir + "like_" + strconv.Itoa(photoId) + ".jpg"
+// 	// } else {
+// 	// 	saveName = saveDir + "dislike_" + strconv.Itoa(photoId) + ".jpg"
+// 	// }
+// 	var bigSide int
+// 	if face.Width < face.Height {
+// 		bigSide = face.Height
+// 	} else {
+// 		bigSide = face.Width
+// 	}
+
+// 	var radianAngle float64
+// 	if face.Mouth_left_y < face.Mouth_right_y {
+
+// 		radianAngle = math.Atan(float64(face.Mouth_right_y - face.Mouth_left_y) / float64(face.Mouth_right_x - face.Mouth_left_x))
+// 	} else {
+
+// 		radianAngle = -math.Atan(float64(face.Mouth_left_y - face.Mouth_right_y) / float64(face.Mouth_right_x - face.Mouth_left_x))
+// 	}
+
+// 	  // radianAngle+=0.5
+
+// 	fmt.Println("radianAngle:", radianAngle, "Angle:", radianAngle * (180/3.14159265359))
+
+// 	imgR := imaging.Rotate(photoImage, radianAngle * (180/3.14159265359), color.Black)
+// 	imgRCenterX := imgR.Rect.Max.X/2
+// 	imgRCenterY := imgR.Rect.Max.Y/2
+// 	img := image.NewRGBA(image.Rect(0, 0, bigSide, bigSide))
+
+// 	var diffF image.Point
+// 	if bigSide == face.Width {
+// 		diffF.X = face.X
+// 		diffF.Y = face.Y - (bigSide-face.Height)/2
+// 	} else {
+// 		diffF.X = face.X - (bigSide-face.Width)/2
+// 		diffF.Y = face.Y
+// 	}
+
+// 	originalImgFaceSquareAngle := math.Atan2(float64(diffF.Y - imgRCenterY), float64(diffF.X - imgRCenterX))
+// 	fmt.Println("radianOriginalImgFaceSquareAngle", originalImgFaceSquareAngle, "originalImgFaceSquareAngle:", originalImgFaceSquareAngle * (180/3.14159265359))
+
+// 	// var diffF2 image.Point
+// 	// if bigSide == face.Width {
+// 	// 	diffF2.X = (imgR.Rect.Max.X - photoImage.Rect.Max.X)/2 + face.X
+// 	// 	diffF2.Y = (imgR.Rect.Max.Y - photoImage.Rect.Max.Y)/2 + face.Y - (bigSide-face.Height)/2
+// 	// } else {
+// 	// 	diffF2.X = int(xM * float32(face.X - (bigSide-face.Width)/2))
+// 	// 	diffF2.Y = int(yM * float32(face.Y))
+// 	// }
+
+// 	radius := math.Sqrt(math.Pow(float64(diffF.X - photoImage.Rect.Max.X/2), 2) + math.Pow(float64(diffF.Y - photoImage.Rect.Max.Y/2), 2))
+
+// 	fmt.Println("radius", radius)
+// 	var diffF3 image.Point
+
+// 		testOIFSA := originalImgFaceSquareAngle
+// 	 for testOIFSA < 8 {
+// 	//  radianAngle+=0.10
+// 	testOIFSA+=.1
+// 	diffF3.X = int(radius * math.Cos(testOIFSA )) + imgRCenterX
+// 	diffF3.Y = int(radius * math.Sin(testOIFSA )) + imgRCenterY
+// 	pixfont.DrawString(imgR, diffF3.X-4, diffF3.Y-4, strconv.Itoa(int((testOIFSA) * (180/3.14159265359))), color.RGBA{255, 0, 0, 255})
+// 	 }
+
+// 	 diffF3.X = int(radius * math.Cos(originalImgFaceSquareAngle )) + imgRCenterX
+// 	 diffF3.Y = int(radius * math.Sin(originalImgFaceSquareAngle )) + imgRCenterY
+
+// 	fmt.Println("cos", math.Cos(radianAngle))
+// 	fmt.Println("sin", math.Sin(radianAngle))
+// 	fmt.Println("diff:", diffF)
+// 	// fmt.Println("diff2:", diffF2)
+// 	fmt.Println("diff3", diffF3)
+
+// 	draw.Draw(img, img.Rect, imgR, diffF3, draw.Src)
+
+// 	// draw.Draw(img, image.Rect(img.Rect.Min.X + imgR.Rect.Min.X, img.Rect.Min.Y + imgR.Rect.Min.Y, img.Rect.Max.X + imgR.Rect.Max.X, img.Rect.Max.Y + imgR.Rect.Max.Y), imgR, diffF, draw.Src)
+
+// 	dst := image.NewRGBA(image.Rect(0, 0, scalePX, scalePX))
+// 	draw.NearestNeighbor.Scale(dst, dst.Rect, img, img.Bounds(), draw.Over, nil)
+// 	img = nil
+// 	if face.Mouth_left_y < face.Mouth_right_y {
+// 	pixfont.DrawString(dst, 10, 10, "KEK" , color.RGBA{0, 255, 0, 255})
+// 	} else {
+// 		pixfont.DrawString(dst, 10, 10, "SESSSSSS" , color.RGBA{0, 255, 0, 255})
+
+// 	}
+// 	saveDir := "../resources/picFace/"
+// 	f, err := os.Create(saveDir + photoName)
+// 	check(err)
+// 	err = jpeg.Encode(f, dst, &jpeg.Options{Quality: 100})
+// 	//err = bmp.Encode(f, dst)
+// 	check(err)
+// 	f.Close()
+
+// 	f2, err := os.Create(saveDir + "R" + photoName)
+// 	check(err)
+// 	err = jpeg.Encode(f2, imgR, &jpeg.Options{Quality: 100})
+// 	//err = bmp.Encode(f, dst)
+// 	check(err)
+// 	f2.Close()
+
+// 	f3, err := os.Create(saveDir + "O" + photoName)
+// 	check(err)
+// 	err = jpeg.Encode(f3, photoImage, &jpeg.Options{Quality: 100})
+// 	//err = bmp.Encode(f, dst)
+// 	check(err)
+// 	f3.Close()
+// }
+
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+
+func testgoriutene(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	sesCount := 10
+	sesChan := make(chan int)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+		go goroutine(db, &wg, i, sesChan)
+	}
+	for i := 0; i < sesCount; i++ {
+		sesChan <- i
+		time.Sleep(time.Duration(rand.Intn(500-100)+100) * time.Millisecond)
+
+	}
+	close(sesChan)
+	wg.Wait()
+}
+
+func goroutine(db *sqlx.DB, wg *sync.WaitGroup, kek int, sesChan chan int) {
+	defer wg.Done()
+	work := true
+	for work {
+		ses, w := <-sesChan
+		work = w
+		if work {
+			//writeNNPhotoToDB(db, strconv.Itoa(kek) + "_" + strconv.Itoa(ses))
+			//time.Sleep(time.Duration(rand.Intn(500-100)+100) * time.Millisecond)
+			fmt.Println(kek, ses)
+		}
+	}
+}
+
+// type kek struct {
+// 	sync.Mutex
+// 	ses int
+// }
+// type kek2 struct {
+// 	ses int
+// }
+
+// func testgoroutine2(t *testing.T) {
+// 	kek := kek{}
+// 	var runRead int32 = 1
+
+// 	var wgr sync.WaitGroup
+// 	wgr.Add(1)
+// 	go goroutine2Read(&wgr, &kek, &runRead)
+
+// 	var wgw sync.WaitGroup
+// 	for i := 0; i < 1000; i++ {
+// 		wgw.Add(1)
+// 		go goroutine2Write(&wgw, &kek)
+// 	}
+// 	wgw.Wait()
+// 	time.Sleep(time.Second)
+// 	atomic.StoreInt32(&runRead, 0)
+
+// 	wgr.Wait()
+
+// 	kekses2 := kek2{}
+// 	kekses2.ses = 1
+// 	kekses3 := kekses2
+// 	kekses3.ses = 3
+// 	kekses(&kekses2)
+// 	fmt.Println(1, kekses2.ses)
+// 	fmt.Println(3, kekses3.ses)
+// }
+
+// func kekses(kek *kek2) {
+// 	kek2 := *kek
+// 	kek2.ses = 2
+// 	fmt.Println(2, kek2.ses)
+// }
+
+// func goroutine2Write(wgw *sync.WaitGroup, kek *kek) {
+// 	defer wgw.Done()
+// 	for i := 0; i < 1000; i++ {
+// 		kek.Lock()
+// 		kek.ses++
+// 		kek.Unlock()
+// 	}
+// }
+// func goroutine2Read(wgr *sync.WaitGroup, kek *kek, runRead *int32) {
+// 	defer wgr.Done()
+// 	for atomic.LoadInt32(runRead) == 1 {
+// 		time.Sleep(time.Second)
+// 		kek.Lock()
+// 		fmt.Println(kek.ses)
+// 		kek.Unlock()
+// 	}
+// }
+
+type photoListToUpdate struct {
+	User_id  int
+	Uid      string
+	Photo_id string
+}
+
+// func testfillUsersToNN_Photos(t *testing.T) {
+// 	db, err := openDB()
+// 	rows, err := db.Query("select * from users")
+// 	check(err)
+// 	uds := DBuserStruct{}
+// 	tsrS := TstructResult{}
+// 	index := 0
+// 	var pLTU []photoListToUpdate
+// 	for rows.Next() {
+// 		_ = rows.Scan(&uds.Id, &uds.Uid, &uds.Data, &uds.Checked, &uds.Like)
+// 		_ = json.Unmarshal([]byte(uds.Data), &tsrS)
+// 		for _, photo := range tsrS.User.Photos {
+// 			pLTU = append(pLTU, photoListToUpdate{User_id: uds.Id, Uid: uds.Uid, Photo_id: photo.ID})
+// 			kek, err := db.Exec("update nn_photos set user_id=$1 where photo_name=$2", uds.Id, uds.Uid+"_"+photo.ID+"_640x800.jpg")
+// 			index++
+// 			fmt.Println(index, uds.Uid, photo.ID, kek, err)
+// 		}
+// 	}
+// 	rows.Close()
+// }
+
+//ПЕРЕПИСАТЬ СВЯЗЬ С БД
+// func testgetStatFromDB(t *testing.T) {
+// 	db, err := openDB()
+// 	checkErr(err)
+// 	us := DBuserStruct{}
+// 	usArr := []DBuserStruct{}
+// 	usersRow, err := db.Query("select * from users")
+// 	for usersRow.Next() {
+// 		usersRow.Scan(&us.Id, &us.Uid, &us.Checked, &us.Like)
+// 		usArr = append(usArr, us)
+// 	}
+// 	ps := photoDBStruct{}
+// 	psArr := []photoDBStruct{}
+// 	photosRow, err := db.Query("select * from nn_photos")
+// 	for photosRow.Next() {
+// 		photosRow.Scan(&ps.Id, &ps.User_id, &ps.Photo_name, &ps.Checked, &ps.Like_dislike)
+// 		psArr = append(psArr, ps)
+// 	}
+// 	usersWithPhoto := 0
+// 	for _, u := range usArr {
+// 		userHavePhoto := false
+// 		for _, p := range psArr {
+// 			if u.Id == p.User_id {
+// 				userHavePhoto = true
+// 				break
+// 			}
+// 		}
+// 		if userHavePhoto {
+// 			usersWithPhoto++
+// 		} else {
+// 			fmt.Println("User dont have photos:", u.Id, u.Uid, u.Checked, u.Like)
+// 		}
+// 	}
+// 	fmt.Println("Users:", len(usArr), "Photos:", len(psArr))
+// }
+
+//ПЕРЕПИСАТЬ СВЯЗЬ С БД
+// func testsaveDataSetToDB(t *testing.T) {
+// 	//loadDir := "../resources/photos/640x800/"
+// 	//saveDir := "../resources/photos/picDataSet/"
+// 	db, err := openDB()
+// 	checkErr(err)
+// 	photoRow, err := db.Query("select * from nn_photos where checked=$1 or checked=$2", 1, 2)
+// 	checkErr(err)
+
+// 	faceQuery := `select x, y, width, height, nose_x, nose_y, left_eye_x,
+// 	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x,
+// 	mouth_right_y, confidence from detected_faces where photo_id=$1`
+// 	checkedPhoto := make(map[string]int)
+// 	checkedUsers := make(map[string]int)
+
+// 	for photoRow.Next() {
+// 		pdbs := photoDBStruct{}
+// 		gfr := &grpctransport.GetFaceResponse{}
+// 		_ = photoRow.Scan(&pdbs.Id, &pdbs.User_id, &pdbs.Photo_name, &pdbs.Checked, &pdbs.Like_dislike)
+// 		checkedPhoto[pdbs.Photo_name] = 1
+// 		checkedUsers[pdbs.Photo_name[:24]] = 1
+// 		faceRow, err := db.Query(faceQuery, pdbs.Id)
+// 		checkErr(err)
+// 		for faceRow.Next() {
+// 			f := grpctransport.Face{}
+// 			_ = faceRow.Scan(
+// 				&f.X, &f.Y, &f.Width, &f.Height, &f.NoseX, &f.NoseY,
+// 				&f.LeftEyeX, &f.LeftEyeY, &f.RightEyeX, &f.RightEyeY,
+// 				&f.MouthLeftX, &f.MouthLeftY, &f.MouthRightX, &f.MouthRightY, &f.Confidence,
+// 			)
+// 			if checkFaceArea(&f, 3000) {
+// 				gfr.PhotoId = pdbs.Photo_name
+// 				gfr.Faces = append(gfr.Faces, &f)
+// 			}
+// 		}
+// 		faceRow.Close()
+// 		if len(gfr.Faces) == 1 {
+// 			//SaveDataset(gfr.Faces[0], gfr.PhotoId, loadDir, saveDir)
+// 			fmt.Println("DS PhotoID:", pdbs.Id)
+// 			checkedPhoto[pdbs.Photo_name] = 2
+// 			checkedUsers[pdbs.Photo_name[:24]] = 2
+// 		}
+// 	}
+// 	photoRow.Close()
+// 	cp1 := 0
+// 	cp2 := 0
+// 	cu1 := 0
+// 	cu2 := 0
+// 	for pn, c := range checkedPhoto {
+// 		if c == 1 {
+// 			cp1++
+// 		} else {
+// 			cp2++
+// 		}
+// 		kek, err := db.Exec("update nn_photos set checked=$1 where photo_name=$2", c, pn)
+// 		fmt.Println(pn, c, kek, err)
+// 	}
+// 	for ui, c := range checkedUsers {
+// 		if c == 1 {
+// 			cu1++
+// 		} else {
+// 			cu2++
+// 		}
+// 		kek, err := db.Exec("update users set checked=$1 where uid=$2", c, ui)
+// 		fmt.Println(ui, c, kek, err)
+// 	}
+// 	fmt.Println("Count of photos:", len(checkedPhoto))
+// 	fmt.Println("cp1", cp1)
+// 	fmt.Println("cp2", cp2)
+// 	fmt.Println("Count of users:", len(checkedUsers))
+// 	fmt.Println("cu1", cu1)
+// 	fmt.Println("cu2", cu2)
+// }
+
+//ПЕРЕПИСАТЬ СВЯЗЬ С БД
+// func testcheckValidFaces(t *testing.T) {
+
+// 	db, err := openDB()
+// 	check(err)
+// 	faceQuery := `select photo_id, x, y, width, height, nose_x, nose_y, left_eye_x,
+// 	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x,
+// 	mouth_right_y, confidence from detected_face`
+// 	faces := []faceDB{}
+// 	faceRow, err := db.Query(faceQuery)
+// 	check(err)
+// 	for faceRow.Next() {
+// 		f := faceDB{}
+// 		_ = faceRow.Scan(
+// 			&f.PhotoId, &f.X, &f.Y, &f.Width, &f.Height, &f.NoseX, &f.NoseY,
+// 			&f.LeftEyeX, &f.LeftEyeY, &f.RightEyeX, &f.RightEyeY,
+// 			&f.MouthLeftX, &f.MouthLeftY, &f.MouthRightX, &f.MouthRightY, &f.Confidence,
+// 		)
+// 		f.Valid = checkFaceAreaNew(&f, 3000)
+// 		faces = append(faces, f)
+// 	}
+// 	faceRow.Close()
+// 	for _, f := range faces {
+// 		kek, err := db.Exec(`insert into detected_faces (photo_id, x, y, width, height, nose_x, nose_y, left_eye_x,
+// 	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x,
+// 	mouth_right_y, confidence) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, f.PhotoId, f.X, f.Y, f.Width, f.Height, f.NoseX, f.NoseY,
+// 			f.LeftEyeX, f.LeftEyeY, f.RightEyeX, f.RightEyeY,
+// 			f.MouthLeftX, f.MouthLeftY, f.MouthRightX, f.MouthRightY, f.Confidence, f.Valid)
+
+// 		//fmt.Println(f.PhotoId, f.X, f.Y, f.Width, f.Height, f.NoseX, f.NoseY,
+// 		//	f.LeftEyeX, f.LeftEyeY, f.RightEyeX, f.RightEyeY,
+// 		//	f.MouthLeftX, f.MouthLeftY, f.MouthRightX, f.MouthRightY, f.Confidence, f.Valid, kek, err)
+// 		fmt.Println(f.PhotoId, kek, err)
+// 	}
+// 	//kek, err := db.Exec("update users set checked=$1 where uid=$2", c, ui)
+// 	//fmt.Println(ui, c, kek, err)
+
+// }
+
+func teststructNull(t *testing.T) {
+	kek := DownloadInfo{}
+	kek.RunDownload = true
+	kek.PhotosCountToDownload = 100
+	kek.MissingPhotosCount = 200
+	fmt.Println(kek)
+	kek = DownloadInfo{}
+	fmt.Println(kek)
+}
+
+func testfillDBValid(t *testing.T) {
+	db, _ := openDB()
+
+	errCount := 0
+	countOfAllUsers := 0
+	countOfValidUsers := 0
+	var photosToUpdateIds []int
+	var usersToUpdateIds []int
+
+	rowsUsers, err := db.Query("select id from users")
+	if err != nil {
+		fmt.Println("[select id from users] Err:", err)
+	}
+	for rowsUsers.Next() {
+		var userId int
+		err = rowsUsers.Scan(&userId)
+		if err != nil {
+			fmt.Println("[rowsUsers.Scan(&userId)] userId:", userId, "Err:", err)
+			errCount++
+		}
+		countOfAllPhotos := 0
+		countOfValidPhotos := 0
+
+		rowsPhotos, err := db.Query("select id from nn_photos where user_id=$1", userId)
+		if err != nil {
+			fmt.Println("[select id from nn_photos where user_id=$1] Err:", err)
+			errCount++
+		}
+		for rowsPhotos.Next() {
+			var photoId int
+			err = rowsPhotos.Scan(&photoId)
+			if err != nil {
+				fmt.Println("[rowsPhotos.Scan(&photoId)] photoId:", photoId, "Err:", err)
+				errCount++
+			}
+
+			countOfAllFaces := 0
+
+			rowsFaces, err := db.Query("select id from detected_faces where photo_id=$1", photoId)
+			if err != nil {
+				fmt.Println("[select id from detected_faces where photo_id=$1] Err:", err)
+				errCount++
+			}
+			for rowsFaces.Next() {
+				countOfAllFaces++
+			}
+
+			if countOfAllFaces == 1 {
+				fmt.Println(" +Photo valid photoId:", photoId, "All faces:", countOfAllFaces)
+				photosToUpdateIds = append(photosToUpdateIds, photoId)
+				countOfValidPhotos++
+			} else {
+				fmt.Println(" -Photo invalid photoId:", photoId, "All faces:", countOfAllFaces)
+			}
+			countOfAllPhotos++
+		}
+
+		if countOfValidPhotos > 0 {
+			fmt.Println("+User valid userId:", userId, "All/Valid photos:", countOfAllPhotos, countOfValidPhotos)
+			usersToUpdateIds = append(usersToUpdateIds, userId)
+			countOfValidUsers++
+		} else {
+			fmt.Println("-User invalid userId:", userId, "All/Valid photos:", countOfAllPhotos, countOfValidPhotos)
+		}
+		fmt.Println("")
+		countOfAllUsers++
+	}
+	for _, pid := range photosToUpdateIds {
+		result, err := db.Exec("update nn_photos set valid=$1 where id=$2", true, pid)
+		if err != nil {
+			fmt.Println("ERROR: Result:", result, "ERR:", err)
+		}
+	}
+	for _, uid := range usersToUpdateIds {
+		result, err := db.Exec("update users set valid=$1 where id=$2", true, uid)
+		if err != nil {
+			fmt.Println("ERROR: Result:", result, "ERR:", err)
+		}
+	}
+	fmt.Println("All/Valid users", countOfAllUsers, countOfValidUsers)
+	fmt.Println("Error Count:", errCount)
+}
+
+type faceToDBStruct struct {
+	photoDBId int
+	face      grpctransport.Face
+}
+
+func testrecheckPhotoNNAndWriteToDB(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	dirPath := "../resources/photos/640x800/"
+	files, err := ioutil.ReadDir(dirPath)
+	checkErr(err)
+	GRPCConnect, err := grpc.Dial(":8081", grpc.WithInsecure())
+	checkErr(err)
+	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+	var detectedValidFacesArr []faceToDBStruct
+	for index, file := range files {
+		if file.Name() == "XXXXXXXXXXXXXXXXXXXXXXXX_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX_640x800.jpg" {
+			row, err := db.Query("select id from nn_photos where photo_name=$1", file.Name())
+			checkErr(err)
+			if row.Next() {
+				var photoDBId int
+				err = row.Scan(&photoDBId)
+				row2, err := db.Query("select id from detected_faces where photo_id=$1", photoDBId)
+				checkErr(err)
+				if !row2.Next() {
+					checkErr(err)
+					getFaceRequest := &grpctransport.GetFaceRequest{}
+					getFaceRequest.PhotoId = file.Name()
+					getFaceRequest.PhotoBytes, err = ioutil.ReadFile(dirPath + file.Name())
+					checkErr(err)
+
+					faceDetect, err := grpcNNClient.GetFace(context.TODO(), getFaceRequest)
+					if checkErr(err) {
+
+						for _, f := range faceDetect.Faces {
+							if int(f.Width*f.Height) > 3000 { // Площадь лица для отсеивания ошибок (методом тыка выявлено, что площадь менее 3000 имеет почти экспоненциальный рост ошибочных решений)
+								//detectedValidFacesArr = append(detectedValidFacesArr, faceToDBStruct{photoDBId: photoDBId, face: *f})
+								//fmt.Println(index, len(files), "Photo add to arr:", file.Name())
+							}
+							detectedValidFacesArr = append(detectedValidFacesArr, faceToDBStruct{photoDBId: photoDBId, face: *f})
+							fmt.Println(index, len(files), "Face add to arr:", file.Name())
+
+							//writeFaceToDB(db, photoDBId, f)
+						}
+
+						fmt.Println(index, len(files), "Photo checked", file.Name())
+					} else {
+						fmt.Println("#######################ERROR!!!!!", file.Name())
+					}
+				} else {
+					fmt.Println(index, len(files), "Photo have faces in database photoDBId:", photoDBId)
+				}
+				row2.Close()
+			} else {
+				fmt.Println("#############Photo does no exist in database:", file.Name())
+			}
+			row.Close()
+			if len(detectedValidFacesArr) == 1000 {
+				break
+			}
+			if len(detectedValidFacesArr) != 0 {
+				fmt.Println("Writed to DataBase:", len(detectedValidFacesArr))
+				for _, dvf := range detectedValidFacesArr {
+					writeFaceToDB(db, dvf.photoDBId, &dvf.face)
+				}
+				detectedValidFacesArr = nil
+			}
+		}
+	}
+	// fmt.Println("Write to DB")
+	// for _, dvf := range detectedValidFacesArr {
+	// 	writeFaceToDB(db, dvf.photoDBId, &dvf.face)
+	// }
+}
+
+func writeFaceToDB(db *sqlx.DB, photoDBId int, f *grpctransport.Face) {
+	var sqlQuery string = `insert into detected_faces (
+		photo_id, x, y, width, height, nose_x, 
+		nose_y, left_eye_x, left_eye_y, right_eye_x, 
+		right_eye_y, mouth_left_x, mouth_left_y, 
+		mouth_right_x, mouth_right_y, confidence
+	) 
+	values 
+		(
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 
+			$11, $12, $13, $14, $15, $16
+		)`
+	_, err := db.Exec(
+		sqlQuery, photoDBId, f.X, f.Y, f.Width, f.Height,
+		f.NoseX, f.NoseY, f.LeftEyeX, f.LeftEyeY, f.RightEyeX,
+		f.LeftEyeY, f.MouthLeftX, f.MouthLeftY, f.MouthRightX,
+		f.MouthRightY, f.Confidence)
+	if !checkErr(err) {
+		fmt.Println("Write Error:", photoDBId)
+	}
+
+}
+
+func testdeleteInvalidFacesFromDB(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	row, err := db.Query("select id, width, height from detected_faces")
+	checkErr(err)
+	var deleteFacesIds []int
+	invalidFacesCount := 0
+	validFacesCount := 0
+	for row.Next() {
+		var faceId int
+		var faceWidth int
+		var faceHeight int
+		row.Scan(&faceId, &faceWidth, &faceHeight)
+		if faceWidth*faceHeight < 3000 {
+			deleteFacesIds = append(deleteFacesIds, faceId)
+			fmt.Println("Invalid Face ID:", faceId)
+			invalidFacesCount++
+		} else {
+			fmt.Println("Valid Face ID", faceId)
+			validFacesCount++
+		}
+	}
+	fmt.Println("Invalid Faces:", invalidFacesCount)
+	fmt.Println("Valid Faces:", validFacesCount)
+
+	for _, deleteFaceId := range deleteFacesIds {
+		result, err := db.Exec("delete from detected_faces where id=$1", deleteFaceId)
+		fmt.Println("Face delete:", deleteFaceId, "Result:", result, "Err:", err)
+	}
+	fmt.Println("Invalid Faces:", invalidFacesCount)
+	fmt.Println("Valid Faces:", validFacesCount)
+}
+
+func testgetFileNameIfItDoesNotExistInDB(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	var photoNamesFromDB []string
+	checkErr(db.Select(&photoNamesFromDB, "select photo_name from nn_photos where valid=1"))
+	photoNamesMap := make(map[string]int)
+	for _, photoName := range photoNamesFromDB {
+		photoNamesMap[photoName] = 1
+	}
+	files, err := ioutil.ReadDir("../resources/NNDataSetPhotos/")
+
+	countOfFiles := 0
+	for _, file := range files {
+		var dbName string
+		exist := false
+		delete(photoNamesMap, file.Name())
+		for index, photoNameFromDB := range photoNamesFromDB {
+			if file.Name() == photoNameFromDB {
+				fmt.Println(index)
+
+				dbName = photoNameFromDB
+				exist = true
+			}
+		}
+		if !exist {
+			countOfFiles++
+			fmt.Println("File in folder:", file.Name(), "in database:", dbName)
+		}
+	}
+	fmt.Println(countOfFiles)
+	for key, data := range photoNamesMap {
+		fmt.Println(key, data)
+	}
+	fmt.Println("map", len(photoNamesMap))
+	fmt.Println("db", len(photoNamesFromDB))
+	fmt.Println("files", len(files))
+}
+
+func testmovePhotos(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+
+	dirPath := "../resources/photos/640x800/"
+	files, err := ioutil.ReadDir(dirPath)
+	validPhotoCount := 0
+	invalidPhotoCount := 0
+	for _, file := range files {
+		row := db.QueryRow("select valid from nn_photos where photo_name=$1", file.Name())
+		checkErr(err)
+		var validPhoto bool
+		err = row.Scan(&validPhoto)
+		checkErr(err)
+		if !validPhoto {
+			err = os.Rename(dirPath+file.Name(), "../resources/photos/640x800invalid/"+file.Name())
+			checkErr(err)
+			invalidPhotoCount++
+		} else {
+			validPhotoCount++
+		}
+	}
+	fmt.Println("Valid/Invalid", validPhotoCount, invalidPhotoCount)
+}
+
+func testsql(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	var userIds []int32
+	checkErr(db.Select(&userIds, "SELECT users.id FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id WHERE nn_photos.valid = 1 AND users.id > $1 AND users.user_like IS NULL GROUP BY users.id ORDER BY users.id LIMIT $2", 0, 10))
+	for _, id := range userIds {
+		var idPhotos []idPhoto
+		checkErr(db.Select(&idPhotos, "SELECT id, photo_name FROM nn_photos WHERE valid = 1 AND user_id = $1", id))
+		for _, idPhoto := range idPhotos {
+			faces := []faceBox{}
+			checkErr(db.Select(&faces, "select x, y, width, height from detected_faces where photo_id=$1", idPhoto.Id))
+			for _, face := range faces {
+				fmt.Println(face)
+			}
+		}
+	}
+}
+
+// get invalid users sql
+// select a.id from users a left join (select distinct id from (select user_id from nn_photos where valid=1) q inner join users a on q.user_id = a.id) b on a.id = b.id where b.id is null
+// get valid users sql
+// select distinct id from (select user_id from nn_photos where valid=1) q inner join users a on q.user_id = a.id order by id
+
+// func testDeleteFromDBDeletedPhotos(t *testing.T) {
+// 	db, err := openDB()
+// 	checkErr(err)
+// 	var photosNames []photoIdName
+// 	checkErr(db.Select(&photosNames, "SELECT id, photo_name FROM nn_photos where valid=1"))
+// 	existFilesCount := 0
+// 	doesNotExistFilesCount := 0
+// 	existReadFilesCount := 0
+// 	doesNotExistReadFilesCount := 0
+// 	photosNames = append(photosNames, photoIdName{Id: 131321, Photo_name: "ХУЙ"})
+// 	for index, photoName := range photosNames {
+// 		if _, err := os.Stat("../resources/NNDataSetPhotos/" + photoName.Photo_name); os.IsNotExist(err) {
+// 			existFilesCount++
+// 			fmt.Println(index, "File exist:", photoName.Id, photoName.Photo_name)
+// 		} else {
+// 			doesNotExistFilesCount++
+// 			fmt.Println(index, "File does not exist:", photoName.Id, photoName.Photo_name)
+// 		}
+// 		_, err := ioutil.ReadFile("../resources/NNDataSetPhotos/" + photoName.Photo_name);
+// 		if checkErr(err) {
+// 			existReadFilesCount++
+// 		} else {
+// 			doesNotExistReadFilesCount++
+// 		}
+// 	}
+// 	fmt.Println("Exist photos count", existFilesCount)
+// 	fmt.Println("Does not exist photos count", doesNotExistFilesCount)
+// 	fmt.Println("Read exist photos count", existReadFilesCount)
+// 	fmt.Println("Read does not exist photos count", doesNotExistReadFilesCount)
+// }
+
+type photoIdName struct {
+	Id         int
+	Photo_name string
+}
+
+// func testsaveRotateCutFaces(t *testing.T) {  // изменилась faceRotate
+// 	db, err := openDB()
+// 	checkErr(err)
+// 	var photosNames []photoIdName
+// 	checkErr(db.Select(&photosNames, "SELECT id, photo_name FROM nn_photos where valid=1"))
+// 	// fmt.Println(photosNames)
+// 	// fmt.Println(len(photosNames))
+// 	var count int
+// 	for index, photoName := range photosNames {
+// 		var fI faceDB
+// 		checkErr(db.Get(&fI, "SELECT * FROM detected_faces where photo_id=$1", photoName.Id))
+// 		if file, err := ioutil.ReadFile("../resources/NNDataSetPhotos/" + photoName.Photo_name); checkErr(err) {
+// 			count++
+// 			// fmt.Println(photoName.Id, photoName.Photo_name)
+
+// 			// _ = file
+// 			// _ = index
+
+// 			decodedImage, _, err := image.Decode(bytes.NewReader(file))
+// 			checkErr(err)
+// 			protoFace := grpctransport.Face{
+// 				X:           int32(fI.X),
+// 				Y:           int32(fI.Y),
+// 				Width:       int32(fI.Width),
+// 				Height:      int32(fI.Height),
+// 				NoseX:       int32(fI.Nose_x),
+// 				NoseY:       int32(fI.Nose_y),
+// 				LeftEyeX:    int32(fI.Left_eye_x),
+// 				LeftEyeY:    int32(fI.Left_eye_y),
+// 				RightEyeX:   int32(fI.Right_eye_x),
+// 				RightEyeY:   int32(fI.Right_eye_y),
+// 				MouthLeftX:  int32(fI.Mouth_left_x),
+// 				MouthLeftY:  int32(fI.Mouth_left_y),
+// 				MouthRightX: int32(fI.Mouth_right_x),
+// 				MouthRightY: int32(fI.Mouth_right_y),
+// 				Confidence:  fI.Confidence,
+// 			}
+// 			SaveNNFaceRotate(&protoFace, convertImageToRGBA(decodedImage), photoName.Photo_name)
+// 			fmt.Println(index+1, "/", len(photosNames))
+// 		}
+// 	}
+// 	fmt.Println(count)
+// 	// SaveNNFaceRotate()
+// }
+
+func testArrayShuffle(t *testing.T) {
+	// db, err := openDB()
+	// checkErr(err)
+	fitAllToModelRequest := grpctransport.FitAllToModelRequest{}
+
+	// row, err := db.Query("SELECT nn_photos.photo_name, users.user_like  FROM nn_photos INNER JOIN users ON nn_photos.user_id = users.id WHERE nn_photos.valid = 1 AND users.user_like IS NOT NULL")
+	// if checkErr(err) {
+	// for row.Next() {
+	// var photoNameLike = grpctransport.PhotoNameLike{}
+	// checkErr(row.Scan(&photoNameLike.PhotoName, &photoNameLike.Like))
+	// fitAllToModelRequest.PhotoNameLike = append(fitAllToModelRequest.PhotoNameLike, &photoNameLike)
+	// }
+	// }
+
+	for i := 0; i < 10; i++ {
+		if i < 5 {
+			fitAllToModelRequest.PhotoNameLike = append(fitAllToModelRequest.PhotoNameLike, &grpctransport.PhotoNameLike{Like: true})
+		} else {
+			fitAllToModelRequest.PhotoNameLike = append(fitAllToModelRequest.PhotoNameLike, &grpctransport.PhotoNameLike{Like: false})
+		}
+	}
+
+	fmt.Println(len(fitAllToModelRequest.PhotoNameLike))
+
+	for _, pnl := range fitAllToModelRequest.PhotoNameLike {
+		fmt.Println("Before shuffle:", pnl.Like)
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(fitAllToModelRequest.PhotoNameLike), func(i, j int) {
+		fitAllToModelRequest.PhotoNameLike[i], fitAllToModelRequest.PhotoNameLike[j] = fitAllToModelRequest.PhotoNameLike[j], fitAllToModelRequest.PhotoNameLike[i]
+	})
+
+	for _, pnl := range fitAllToModelRequest.PhotoNameLike {
+		fmt.Println("After shuffle:", pnl.Like)
+	}
+}
+
+func testcreateDB(t *testing.T) {
+	_, err := os.Create("../testDB.db")
+	checkErr(err)
+	db, err := sqlx.Open("sqlite3", "../testDB.db")
+	checkErr(err)
+
+	_, err = db.Exec(`CREATE TABLE sqlite_sequence(name,seq)`)
+	checkErr(err)
+
+	_, err = db.Exec(`CREATE TABLE "preferences" (
+		"token"	TEXT UNIQUE
+	, "draw_box"	NUMERIC NOT NULL DEFAULT 0)`)
+	checkErr(err)
+
+	_, err = db.Exec(`CREATE TABLE "users" (
+		"id"	INTEGER NOT NULL UNIQUE,
+		"uid"	TEXT NOT NULL UNIQUE,
+		"user_like"	NUMERIC,
+		PRIMARY KEY("id" AUTOINCREMENT)
+	)`)
+	checkErr(err)
+
+	_, err = db.Exec(`CREATE TABLE "nn_photos" (
+		"id"	INTEGER NOT NULL UNIQUE,
+		"user_id"	INTEGER NOT NULL,
+		"photo_name"	TEXT NOT NULL UNIQUE,
+		"valid"	NUMERIC NOT NULL DEFAULT 0,
+		FOREIGN KEY("user_id") REFERENCES "users"("id"),
+		PRIMARY KEY("id" AUTOINCREMENT)
+	)`)
+	checkErr(err)
+
+	_, err = db.Exec(`CREATE TABLE "detected_faces" (
+		"id"	INTEGER NOT NULL UNIQUE,
+		"photo_id"	INTEGER NOT NULL,
+		"x"	INTEGER NOT NULL,
+		"y"	INTEGER NOT NULL,
+		"width"	INTEGER NOT NULL,
+		"height"	INTEGER NOT NULL,
+		"nose_x"	INTEGER,
+		"nose_y"	INTEGER,
+		"left_eye_x"	INTEGER,
+		"left_eye_y"	INTEGER,
+		"right_eye_x"	INTEGER,
+		"right_eye_y"	INTEGER,
+		"mouth_left_x"	INTEGER,
+		"mouth_left_y"	INTEGER,
+		"mouth_right_x"	INTEGER,
+		"mouth_right_y"	INTEGER,
+		"confidence"	REAL NOT NULL,
+		FOREIGN KEY("photo_id") REFERENCES "nn_photos"("id"),
+		PRIMARY KEY("id" AUTOINCREMENT)
+	)`)
+	checkErr(err)
+}
+
+// func testCheckAutoLikePredict(t *testing.T) {
+
+// 	GRPCConnect, err := grpc.Dial(":8081", grpc.WithInsecure())
+// 	checkErr(err)
+// 	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+
+// 	regex, _ := regexp.Compile(`^[a-f0-9]{24}_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_\d+x\d+.(jpg)$`)
+// 	// regexExt := regexp.MustCompile(`\.(\w+)\?`)
+
+// 	files, err := ioutil.ReadDir("../resources/NNDataSetPhotos")
+// 	checkErr(err)
+
+// 	// var photosBytes [][]byte
+// 	// var decodedImages []image.Image
+// 	countToReadPhotos := 3
+// 	var cutFaces [][]byte
+
+// 	for i, file := range files {
+// 		if regex.MatchString(file.Name()) {
+// 			fmt.Println("Photo readed:", file.Name())
+// 			photoBytes, err := ioutil.ReadFile("../resources/NNDataSetPhotos/" + file.Name())
+// 			checkErr(err)
+
+// 			ext := regex.FindStringSubmatch(file.Name())[1]
+// 			decodedImage, err := decodePhoto(photoBytes, ext)
+// 			checkErr(err)
+
+// 			faceDetect, err := grpcNNClient.GetFace(context.TODO(), &grpctransport.GetFaceRequest{PhotoBytes: photoBytes})
+// 			if checkErr(err) {
+// 				var vF []int //valid Faces on photo
+// 				for index, f := range faceDetect.Faces {
+// 					if int(f.Width*f.Height) > 3000 {
+// 						vF = append(vF, index)
+// 					}
+// 				}
+// 				if len(vF) == 1 {
+// 					cutFaces = append(cutFaces, RotateAndCutFace(faceDetect.Faces[vF[0]], convertImageToRGBA(decodedImage)))
+// 				}
+// 			}
+// 			if i > countToReadPhotos {
+// 				break
+// 			}
+// 		} else {
+// 			fmt.Println("No photo readed:", file.Name())
+// 			countToReadPhotos++
+// 		}
+// 	}
+
+// 	if len(cutFaces) > 0 {
+// 		predict, err := grpcNNClient.PredictFromBytes(context.TODO(), &grpctransport.PredictFromBytesRequest{PhotosBytes: cutFaces})
+// 		if checkErr(err) {
+// 			var likePercent float32
+// 			var dislikePercent float32
+// 			for _, predictPhoto := range predict.Predict {
+// 				likePercent += predictPhoto.Like
+// 				dislikePercent += predictPhoto.Dislike
+// 			}
+// 			likePercent /= float32(len(predict.Predict)) / 100
+// 			dislikePercent /= float32(len(predict.Predict)) / 100
+// 			fmt.Println("Like percent:", likePercent)
+// 			fmt.Println("Dislike percent:", dislikePercent)
+// 		}
+// 	}
+
+// }
+
+type chantest struct {
+	channel chan int
+}
+
+func testсhannels(t *testing.T) {
+	var wg sync.WaitGroup
+	c := chantest{}
+	c.channel = make(chan int, 10)
+	wg.Add(2)
+	go writeChan(&wg, c.channel)
+
+	go c.readChan(&wg)
+
+	wg.Wait()
+}
+
+func writeChan(wg *sync.WaitGroup, channel chan int) {
+	for i := 0; i < 50; i++ {
+		if len(channel) > 9 {
+			<-channel
+		}
+		channel <- i
+		fmt.Println("Write:", i, "Len channel:", len(channel))
+		time.Sleep(time.Millisecond * 100)
+	}
+	for len(channel) != 0 {
+		time.Sleep(time.Second)
+	}
+	close(channel)
+	wg.Done()
+}
+
+func (c *chantest) readChan(wg *sync.WaitGroup) {
+	for i := range c.channel {
+		fmt.Println("Read:", i)
+		time.Sleep(time.Millisecond * 1000)
+	}
+	wg.Done()
+}
+
+func testcontextClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go handleSignals(cancel)
+	tipoServer(ctx)
+}
+
+func handleSignals(cancel context.CancelFunc) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	for {
+		sig := <-sigCh
+		switch sig {
+		case os.Interrupt:
+			cancel()
+			return
+		}
+	}
+}
+
+func tipoServer(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Cancel from context")
+			os.Exit(0)
+			time.Sleep(time.Second * 3)
+			fmt.Println("Canceled from context")
+			return
+		default:
+			fmt.Println("Я типо работаю ок да?")
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func testtoken(t *testing.T) {
+	str := []byte(`{"token":"XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"}`)
+	var objmap map[string]json.RawMessage
+	checkErr(json.Unmarshal(str, &objmap))
+	fmt.Println(strings.Replace(string(objmap["token"]), `"`, "", -1))
+}
+
+func testatomic(t *testing.T) {
+	var wg sync.WaitGroup
+	var kek *atomic.Int32
+	var ses atomic.Bool
+	ses.Store(true)
+
+	wg.Add(2)
+
+	go func(kek *atomic.Int32, wg *sync.WaitGroup) {
+		for i := 0; i < 10000; i++ {
+			kek.Store(kek.Load() + 1)
+		}
+		wg.Done()
+	}(kek, &wg)
+
+	go func(kek *atomic.Int32, wg *sync.WaitGroup) {
+		for i := 0; i < 10000; i++ {
+			kek.Store(kek.Load() + 1)
+		}
+		wg.Done()
+	}(kek, &wg)
+
+	go func(kek *atomic.Int32) {
+		for {
+			fmt.Println(kek.Load())
+		}
+	}(kek)
+
+	wg.Wait()
+}
+
+func testRenamePhotos(t *testing.T) {
+	// 	db, err := openDB()
+	// 	checkErr(err)
+	// 	var photosDB photoDBStruct
+	// 	checkErr(db.Select(&photosDB, "SELECT * FROM nn_photos"))
+
+	// 	for photo
+	dir := "../resources/NNDataSetPhotos/"
+	files, err := ioutil.ReadDir(dir)
+	checkErr(err)
+	index := 0
+	for _, file := range files {
+		ext := strings.Split(file.Name(), ".")
+		if ext[1] != "jpg" {
+			fmt.Println(index, file.Name())
+			os.Rename(dir+file.Name(), dir+ext[0]+".jpg")
+			index++
+		}
+	}
+}
+
+func testRenamePhotosInDB(t *testing.T) {
+	db, err := openDB()
+	checkErr(err)
+	var photosDB []photoDBStruct
+	checkErr(db.Select(&photosDB, "SELECT * FROM nn_photos"))
+	index := 0
+	for _, photo := range photosDB {
+		ext := strings.Split(photo.Photo_name, ".")
+		if ext[1] != "jpg" {
+			fmt.Println(index, photo.Photo_name)
+			db.Exec("UPDATE nn_photos SET photo_name = $1 WHERE id = $2", ext[0]+".jpg", photo.Id)
+			index++
+		}
+	}
+}
+
+// func testCheckForValidNNPhotos(t *testing.T) {
+// 	// readDir := "/kek/golang/src/github.com/pashanskiy/tnn/facedetect/testNetworks/faceDS128cut/dislike"
+// 	readDir := "/kek/Desktop/trashPhotos128cut/"
+// 	saveDir := "/kek/Desktop/trashPhotos128cutCheckv2/"
+// 	GRPCConnect, err := grpc.Dial(":8081", grpc.WithInsecure())
+// 	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+// 	checkErr(err)
+// 	files, err := ioutil.ReadDir(readDir)
+// 	for index, file := range files {
+// 		if file.Name() == ".DS_Store" {
+// 			continue
+// 		}
+// 		photoImg, err := ioutil.ReadFile(readDir + file.Name())
+// 		if checkErr(err) {
+// 			predict, err := grpcNNClient.PredictValidFace(context.TODO(), &grpctransport.PredictPhotoValidRequest{PhotoBytes: photoImg})
+// 			checkErr(err)
+
+// 			// if predict.Predict > 0.85 {
+
+// 			// } else {
+
+// 			// }
+// 			checkErr(ioutil.WriteFile(saveDir+fmt.Sprintf("%f", predict.Predict)+"_"+strings.Split(file.Name(), ".jpg")[0]+".jpg", photoImg, 0644))
+
+// 			fmt.Println(index, "P:", predict.Predict, file.Name())
+// 		} else {
+// 			fmt.Println("Error read file:", file.Name())
+// 		}
+// 		// break
+// 	}
+// }
+
+// func testDeleteInvalidNNPhotos(t *testing.T) {
+// 	readDir := "/kek/golang/src/github.com/pashanskiy/tnn/facedetect/testNetworks/faceDS128cutFilter/like/"
+
+// 	GRPCConnect, err := grpc.Dial(":8081", grpc.WithInsecure())
+// 	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+// 	checkErr(err)
+// 	files, err := ioutil.ReadDir(readDir)
+// 	for index, file := range files {
+// 		if file.Name() == ".DS_Store" {
+// 			continue
+// 		}
+// 		photoImg, err := ioutil.ReadFile(readDir + file.Name())
+// 		if checkErr(err) {
+// 			predict, err := grpcNNClient.PredictValidFace(context.TODO(), &grpctransport.PredictPhotoValidRequest{PhotoBytes: photoImg})
+// 			checkErr(err)
+
+// 			if predict.Predict < 0.85 {
+// 				os.Remove(readDir + file.Name())
+// 				fmt.Println("Removed:", index, "/", len(files), "P:", predict.Predict, file.Name())
+
+// 			} else {
+// 				fmt.Println("  Valid:", index, "/", len(files), "P:", predict.Predict, file.Name())
+// 			}
+
+// 		} else {
+// 			fmt.Println("Error read file:", file.Name())
+// 		}
+// 		// break
+// 	}
+// }
+
+func testGetAndCheckPhotoWithoutBackground(t *testing.T) {
+	readDir := "../resources/NNDataSetPhotos/"
+
+	regex, _ := regexp.Compile(`^[a-f0-9]{24}_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_\d+x\d+.(jpg)$`)
+	GRPCConnect, err := grpc.Dial(":8081", grpc.WithInsecure())
+	checkErr(err)
+	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+
+	db, err := openDB()
+	var photosDB []photoDBStruct
+	checkErr(db.Select(&photosDB, "SELECT * FROM nn_photos where valid=1"))
+	// checkErr(db.Select(&photosDB, "SELECT * FROM nn_photos"))
+
+	for index, photoDB := range photosDB {
+		photoBytes, err := ioutil.ReadFile(readDir + photoDB.Photo_name)
+		if !checkErr(err) {
+			fmt.Println("ERROR read file:", photoDB.Photo_name)
+			continue
+		}
+
+		photoImage, err := decodePhoto(photoBytes, regex.FindStringSubmatch(photoDB.Photo_name)[1])
+
+		if photoImage != nil {
+			photoRGBA := image.NewRGBA(image.Rect(0, 0, photoImage.Bounds().Dx(), photoImage.Bounds().Dy()))
+			draw.Draw(photoRGBA, photoRGBA.Bounds(), photoImage, photoImage.Bounds().Min, draw.Src)
+			photoImage = nil
+
+			face := faceDB{}
+			checkErr(db.Get(&face, `select id, x, y, width, height, nose_x, nose_y, left_eye_x, 
+			left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x, 
+			mouth_right_y, confidence from detected_faces where photo_id=$1`, photoDB.Id))
+
+			cuttedAndRotatedPhotoJPG := CutPhotoAndRotate(face, photoRGBA)
+			predict, err := grpcNNClient.CutBackgroundAndValidFace(context.TODO(), &grpctransport.CutBackgroundAndValidFaceRequest{PhotoBytes: cuttedAndRotatedPhotoJPG})
+			checkErr(err)
+
+			if predict.Valid >= 0.9 {
+				// checkErr(ioutil.WriteFile("../resources/NNFace/"+photoDB.Photo_name, predict.PhotoBytes, 0644))
+				fmt.Println(index, "/", len(photosDB), "id:", photoDB.Id, "Valid:  ", predict.Valid)
+			} else {
+				fmt.Println(index, "/", len(photosDB), "id:", photoDB.Id, "Invalid:  ", predict.Valid)
+			}
+			// if predict.Valid >= 0.90 {
+			// 	checkErr(ioutil.WriteFile("/kek/Desktop/trashPhotostest/valid/" + fmt.Sprintf("%f", predict.Valid) + "_" + strconv.Itoa(photoDB.Id) + "M.jpg", predict.PhotoBytes, 0644))
+			// 	fmt.Println(index, "/", len(photosDB), "id:", photoDB.Id, "Valid:  ", predict.Valid)
+			// } else {
+			// 	_, err = db.Exec("UPDATE nn_photos SET valid=$1 WHERE id=$2", false, photoDB.Id)
+			// 	checkErr(err)
+			// 	checkErr(ioutil.WriteFile("/kek/Desktop/trashPhotostest/invalid/" + fmt.Sprintf("%f", predict.Valid) + "_" + strconv.Itoa(photoDB.Id) + "M.jpg", predict.PhotoBytes, 0644))
+			// 	fmt.Println(index, "/", len(photosDB), "id:", photoDB.Id, "Invalid:", predict.Valid)
+			// }
+		} else {
+			fmt.Println("ERROR nil:", photoDB.Photo_name)
+		}
+	}
+}
+
+func testGetDataSetFromFaceDS(t *testing.T) {
+	readDir := "/kek/golang/src/github.com/pashanskiy/tnn/resources/NNFace/"
+	saveFullDSDir := "/kek/Desktop/ds/dsFull/"
+	saveAlignDSDir := "/kek/Desktop/ds/dsAlign/"
+
+	db, err := openDB()
+	checkErr(err)
+	var pnla []photoNameAndLikeStruct
+	checkErr(db.Select(&pnla, "SELECT photo_name, nn_photos.id, user_like FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where user_like is not NULL and valid = 1"))
+	pnlaMap := make(map[string]bool)
+
+	for _, pnl := range pnla {
+		pnlaMap[pnl.Photo_name] = pnl.User_like
+	}
+
+	files, err := ioutil.ReadDir(readDir)
+
+	var fullDS []photoNameAndLikeStruct
+	var alignedDSLike []photoNameAndLikeStruct
+	var alignedDSDislike []photoNameAndLikeStruct
+
+	likeCount := 0
+	dislikeCount := 0
+
+	for _, file := range files {
+		if pnlaMap[file.Name()] {
+			fullDS = append(fullDS, photoNameAndLikeStruct{Photo_name: file.Name(), User_like: true})
+			alignedDSLike = append(alignedDSLike, photoNameAndLikeStruct{Photo_name: file.Name(), User_like: true})
+			likeCount++
+		} else {
+			fullDS = append(fullDS, photoNameAndLikeStruct{Photo_name: file.Name(), User_like: false})
+			alignedDSDislike = append(alignedDSDislike, photoNameAndLikeStruct{Photo_name: file.Name(), User_like: false})
+			dislikeCount++
+		}
+	}
+	countFullLike := 0
+	countFullDislike := 0
+	countAlignLike := 0
+	countAlignDislike := 0
+
+	for index, fDS := range fullDS {
+		_ = index
+		input, err := ioutil.ReadFile(readDir + fDS.Photo_name)
+		if !checkErr(err) {
+			continue
+		}
+		if fDS.User_like {
+			checkErr(ioutil.WriteFile(saveFullDSDir+"like/"+fDS.Photo_name, input, 0644))
+			fmt.Println(index, len(fullDS), "Copy like    FullDS:", fDS.Photo_name)
+			countFullLike++
+		} else {
+			if checkErr(ioutil.WriteFile(saveFullDSDir+"dislike/"+fDS.Photo_name, input, 0644)) {
+				fmt.Println(index, len(fullDS), "Copy dislike FullDS:", fDS.Photo_name)
+				countFullDislike++
+			} else {
+				fmt.Println("EROOR: file does not exit:", fDS.Photo_name)
+			}
+		}
+	}
+
+	fmt.Println(len(alignedDSLike), len(alignedDSDislike))
+
+	if likeCount > dislikeCount {
+		alignedDSLike = randDeleleFromSlice(likeCount-dislikeCount, alignedDSLike)
+	} else {
+		alignedDSDislike = randDeleleFromSlice(dislikeCount-likeCount, alignedDSDislike)
+	}
+
+	fmt.Println(len(alignedDSLike), len(alignedDSDislike))
+
+	countAlignLike = writeAlignedDS(alignedDSLike, readDir, saveAlignDSDir, "like", len(fullDS))
+	countAlignDislike = writeAlignedDS(alignedDSDislike, readDir, saveAlignDSDir, "dislike", len(fullDS))
+
+	fmt.Println("Full like:    ", countFullLike)
+	fmt.Println("Full dislike: ", countFullDislike)
+	fmt.Println("Align like:   ", countAlignLike)
+	fmt.Println("Align dislike:", countAlignDislike)
+}
+
+func randDeleleFromSlice(deleteCount int, alignedDS []photoNameAndLikeStruct) []photoNameAndLikeStruct {
+	delIndex := 0
+	for i := 0; i < deleteCount; i++ {
+		for {
+			delIndex = rand.Intn(len(alignedDS))
+			if delIndex >= len(alignedDS) {
+				continue
+			}
+			break
+		}
+		alignedDS = append(alignedDS[:delIndex], alignedDS[delIndex+1:]...)
+	}
+	return alignedDS
+}
+
+func writeAlignedDS(alignedDS []photoNameAndLikeStruct, readDir, saveAlignDSDir, addDir string, lenFullDS int) int {
+	count := 0
+	for index, aDS := range alignedDS {
+		_ = index
+		input, err := ioutil.ReadFile(readDir + aDS.Photo_name)
+		if !checkErr(err) {
+			continue
+		}
+
+		if checkErr(ioutil.WriteFile(saveAlignDSDir+addDir+"/"+aDS.Photo_name, input, 0644)) {
+			fmt.Println(index, lenFullDS, "Copy "+addDir+"    FullDS:", aDS.Photo_name)
+			count++
+		} else {
+			fmt.Println("EROOR: file does not exit:", aDS.Photo_name)
+		}
+	}
+	return count
+}
+
+func testGetWeightInfo(t *testing.T) {
+	readDir := "/kek/Desktop/nns/modelAdamLDv1/"
+	files, err := ioutil.ReadDir(readDir)
+	checkErr(err)
+
+	bestWeight := struct {
+		FileName string
+		Loss     float64
+		Accuracy float64
+	}{}
+
+	regex, _ := regexp.Compile(`^E(\d+)_L((\d)[.](\d+))_A((\d)[.](\d+))\.hdf5$`)
+
+	kek := 0
+
+	for _, file := range files {
+		if file.Name() == ".DS_Store" {
+			continue
+		}
+
+		if regex.MatchString(file.Name()) {
+
+			regexGroups := regex.FindStringSubmatch(file.Name())
+			if len(regexGroups) == 8 {
+				loss := 0.0
+				acc := 0.0
+				if valLoss, err := strconv.ParseFloat(regexGroups[2], 64); checkErr(err) {
+					loss = valLoss
+				} else {
+					fmt.Println("Error: Parse ValLoss (parseQuary.go, StreamingRetrainModel)")
+				}
+				if valAcc, err := strconv.ParseFloat(regexGroups[5], 64); checkErr(err) {
+					acc = valAcc
+				} else {
+					fmt.Println("Error: Parse ValAccuacy (parseQuary.go, StreamingRetrainModel)")
+				}
+				// fmt.Println(file.Name(), loss, acc)
+				if (loss <= bestWeight.Loss && acc >= bestWeight.Accuracy) || (bestWeight.Loss == 0 && bestWeight.Accuracy == 0) {
+					checkErr(os.Remove(readDir + bestWeight.FileName))
+					bestWeight.FileName = file.Name()
+					bestWeight.Loss = loss
+					bestWeight.Accuracy = acc
+					fmt.Println("            ", file.Name(), loss, acc)
+
+				} else {
+					// if bestWeight.FileName != "" {
+					checkErr(os.Remove(readDir + file.Name()))
+					// }
+					kek++
+
+				}
+
+			} else {
+				fmt.Println("Error: Regex groups != 8 (parseQuary.go, StreamingRetrainModel)")
+			}
+		}
+	}
+	fmt.Println("Best weight:", bestWeight.FileName)
+	fmt.Println(kek)
+}
+
+// func testReValidPhotosToDB(t *testing.T) {
+// 	loadDir := "../resources/NNDataSetPhotos/"
+// 	regex, _ := regexp.Compile(`^[a-f0-9]{24}_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_\d+x\d+.(jpg)$`)
+// 	db, err := openDB()
+
+// 	GRPCConnect, err := grpc.Dial(":8081", grpc.WithInsecure())
+// 	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+
+// 	checkErr(err)
+// 	var pnla []photoNameAndLikeStruct
+// 	checkErr(db.Select(&pnla, "SELECT photo_name, nn_photos.id, user_like FROM users INNER JOIN nn_photos ON nn_photos.user_id = users.id where user_like is not NULL and valid = 1"))
+// 	faceQuery := `select id, x, y, width, height, nose_x, nose_y, left_eye_x,
+// 	left_eye_y, right_eye_x, right_eye_y, mouth_left_x, mouth_left_y, mouth_right_x,
+// 	mouth_right_y, confidence from detected_faces where photo_id=$1`
+// 	cl := 0
+// 	cd := 0
+
+// 	for _, pnl := range pnla {
+// 		face := faceDB{}
+// 		checkErr(db.Get(&face, faceQuery, pnl.Id))
+// 		checkErr(err)
+// 		photoFile, err := ioutil.ReadFile(loadDir + pnl.Photo_name)
+// 		photoImage, err := decodePhoto(photoFile, regex.FindStringSubmatch(pnl.Photo_name)[1])
+// 		checkErr(err)
+// 		if photoImage != nil {
+// 			photoRGBA := image.NewRGBA(image.Rect(0, 0, photoImage.Bounds().Dx(), photoImage.Bounds().Dy()))
+// 			draw.Draw(photoRGBA, photoRGBA.Bounds(), photoImage, photoImage.Bounds().Min, draw.Src)
+// 			photoImage = nil
+
+// 			predict, err := grpcNNClient.PredictValidFace(context.TODO(), &grpctransport.PredictFromBytesRequest{PhotosBytes: [][]byte{SaveDatasetRotate(face, photoRGBA)}})
+// 			checkErr(err)
+// 			//LIKE и DISLIKE ПЕРЕПУТАННЫ!
+// 			if predict.Predict[0].Dislike >= 0.85 {
+
+// 				_, err := db.Exec("UPDATE nn_photos SET valid=1 WHERE id=$1", pnl.Id)
+// 				checkErr(err)
+// 				cl++
+// 				fmt.Println("LIKE PhotoID:", pnl.Id)
+// 			} else {
+// 				_, err := db.Exec("UPDATE nn_photos SET valid=0 WHERE id=$1", pnl.Id)
+// 				checkErr(err)
+// 				cd++
+// 				fmt.Println("DISL PhotoID:", pnl.Id)
+// 			}
+
+// 		} else {
+// 			fmt.Println("ERROR:", pnl.Photo_name)
+// 		}
+// 	}
+// 	fmt.Println("Count of likes", cl, "dislikes:", cd)
+// }
+
+func testValidatePhotoJPG(t *testing.T) {
+	loadDir := "/kek/Downloads/kekPhotos/"
+	saveDir := "/kek/Downloads/kekPhotos/kek/"
+
+	GRPCConnect, err := grpc.Dial(":8091", grpc.WithInsecure())
+	checkErr(err)
+	grpcNNClient := grpctransport.NewGrpcServiceNNClient(GRPCConnect)
+
+	photoFile, err := ioutil.ReadFile(loadDir + "kek.jpg")
+
+	srcimg, _, err := image.Decode(bytes.NewReader(photoFile))
+	checkErr(err)
+
+	faceDetect, err := grpcNNClient.GetFace(context.TODO(), &grpctransport.GetFaceRequest{PhotoBytes: photoFile})
+	checkErr(err)
+	_ = faceDetect
+
+	b := srcimg.Bounds()
+	image := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(image, image.Bounds(), srcimg, b.Min, draw.Src)
+	srcimg = nil
+
+	for index, face := range faceDetect.Faces {
+		faceX1 := int(face.X)
+		faceY1 := int(face.Y)
+		faceX2 := int(face.X + face.Width)
+		faceY2 := int(face.Y + face.Height)
+
+		faceDb := faceDB{
+			X:             int(face.X),
+			Y:             int(face.Y),
+			Width:         int(face.Width),
+			Height:        int(face.Height),
+			Nose_x:        int(face.NoseX),
+			Nose_y:        int(face.NoseY),
+			Left_eye_x:    int(face.LeftEyeX),
+			Left_eye_y:    int(face.LeftEyeY),
+			Right_eye_x:   int(face.RightEyeX),
+			Right_eye_y:   int(face.RightEyeY),
+			Mouth_left_x:  int(face.MouthLeftX),
+			Mouth_left_y:  int(face.MouthLeftY),
+			Mouth_right_x: int(face.MouthRightX),
+			Mouth_right_y: int(face.MouthRightY),
+			Confidence:    face.Confidence}
+
+		imageCopy := *image
+		cutPhoto := CutPhotoAndRotate(faceDb, &imageCopy)
+		checkErr(ioutil.WriteFile(saveDir+strconv.Itoa(index)+"cut.jpg", cutPhoto, 0644))
+
+		pixfont.DrawString(image, int(face.NoseX)-4, int(face.NoseY)-4, "N", color.RGBA{0, 255, 0, 255})
+		pixfont.DrawString(image, int(face.LeftEyeX)-4, int(face.LeftEyeY)-4, "E", color.RGBA{0, 255, 0, 255})
+		pixfont.DrawString(image, int(face.RightEyeX)-4, int(face.RightEyeY)-4, "E", color.RGBA{0, 255, 0, 255})
+		pixfont.DrawString(image, int(face.MouthLeftX)-4, int(face.MouthLeftY)-4, "M", color.RGBA{0, 255, 0, 255})
+		pixfont.DrawString(image, int(face.MouthRightX)-4, int(face.MouthRightY)-4, "M", color.RGBA{0, 255, 0, 255})
+
+		Rect(faceX1, faceY1, faceX2, faceY2, image)
+
+		//pixfont.DrawString(image, faceX1+5, faceY2+5, "face: " + fmt.Sprintf("%f", face.Confidence)[0:4] , color.RGBA{0, 255, 0, 255})
+		pixfont.DrawString(image, faceX1+5, faceY2+5, "face: "+fmt.Sprintf("%f", face.Confidence), color.RGBA{0, 255, 0, 255})
+
+		
+		f, err := os.Create(saveDir+"print.jpg")
+		checkErr(err)
+		err = jpeg.Encode(f, image, &jpeg.Options{Quality: 100})
+		checkErr(err)
+		f.Close()
+
+		_, err = grpcNNClient.CutBackgroundAndValidFace(context.TODO(), &grpctransport.CutBackgroundAndValidFaceRequest{PhotoBytes: cutPhoto})
+		checkErr(err)
+	}
+
+
+
+
+}

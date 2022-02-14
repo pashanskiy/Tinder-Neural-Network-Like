@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package grpctransport;
+option go_package = "github.com/pashanskiy/tnn/components/grpc;grpctransport";
+
+message EmptyMessageNN {}
+
+message Face {
+  int32 X = 1;
+  int32 Y = 2;
+  int32 Width = 3;
+  int32 Height = 4;
+  int32 NoseX = 5;
+  int32 NoseY = 6;
+  int32 LeftEyeX = 7;
+  int32 LeftEyeY = 8;
+  int32 RightEyeX = 9;
+  int32 RightEyeY = 10;
+  int32 MouthLeftX = 11;
+  int32 MouthLeftY = 12;
+  int32 MouthRightX = 13;
+  int32 MouthRightY = 14;
+  float Confidence = 15;
+}
+
+message GetFaceRequest {
+  string PhotoId = 1;
+  bytes PhotoBytes = 2;
+}
+
+message GetFaceResponse {
+  string PhotoId = 1;
+  repeated Face Faces = 2;
+}
+
+enum FitOrPredict {
+  FITORPREDICT = 0;
+  FIT = 1;
+  PREDICT = 2;
+}
+enum LikeDislike {
+  LIKEDISLIKE = 0;
+  LIKE = 1;
+  DISLIKE = 2;
+}
+
+message PredictFromBytesRequest {
+  int32 UserId = 1;
+  repeated bytes PhotosBytes = 2; 
+}
+
+message PhotosToModelResponse {
+  int32 UserId = 1;
+  repeated float PredictLikeDislike = 2;
+}
+
+message PhotoNameLike {
+  string PhotoName = 1;
+  bool Like = 2;
+}
+
+message FitAllToModelRequest {
+  int32 CountOfEpochs = 1;
+  repeated PhotoNameLike PhotoNameLike = 2;
+  repeated PhotoNameLike PhotoNameLikeValidate = 3;
+}
+
+message FitStatusResponseNN {
+  int32 Epoch = 1;
+  int32 Batch = 2;
+}
+
+message CutBackgroundAndValidFaceRequest {
+  bytes PhotoBytes = 1;
+}
+
+message CutBackgroundAndValidFaceResponse {
+  bytes PhotoBytes = 1;
+  float Valid = 2;
+}
+
+service GrpcServiceNN {
+  rpc PingNN(EmptyMessageNN) returns (EmptyMessageNN) {}
+  rpc GetFace(GetFaceRequest) returns (GetFaceResponse) {}
+  rpc PredictFromBytes(PredictFromBytesRequest) returns (PhotosToModelResponse) {}
+  rpc LoadWeigths(EmptyMessageNN) returns (EmptyMessageNN) {}
+  rpc FitAllToModel(FitAllToModelRequest) returns (EmptyMessageNN) {}
+  rpc GetStatusOfFit(EmptyMessageNN) returns (FitStatusResponseNN) {}
+  rpc CutBackgroundAndValidFace(CutBackgroundAndValidFaceRequest) returns (CutBackgroundAndValidFaceResponse) {}
+  rpc ExitApp(EmptyMessageNN) returns (EmptyMessageNN) {}
+}

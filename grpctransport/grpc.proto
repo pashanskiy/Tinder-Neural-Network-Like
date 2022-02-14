@@ -1,0 +1,191 @@
+syntax = "proto3";
+
+package grpctransport;
+option go_package = "github.com/pashanskiy/tnn/components/grpc;grpctransport";
+
+message EmptyMessage {}
+
+message GetTokenResponse {
+  bool ActualToken = 1;
+  string Token = 2;
+}
+
+message GetDownloadInfoFromDBResponse {
+int32 NNDataSetCount = 1;
+int32 NNDataSetAccountsCount = 2;
+int32 NNDataSetSwipedAccountsCount = 3;
+int32 NNDataSetSwipedPhotosCount = 4;
+int32 DownloadedAccountsCount = 5;
+int32 DownloadedPhotosCount = 6;
+bool RunDownload = 7;
+}
+
+message SetTokenRequest {
+  string Token = 1;
+}
+message SetTokenResponse {
+  bool ActualToken = 1;
+}
+
+message User {
+  int32 UserID = 1;
+  repeated bytes Pic = 2;
+}
+message GetUsersRequest {
+  int32 FromUserID = 1;
+  int32 CountOfUsers = 2;
+}
+message GetUsersResponse {
+  repeated User Users = 1;
+}
+
+message LikeDislikeRequest {
+  int32 UserId = 1;
+  bool LikeDislike = 2;
+}
+
+message SetDownloadPhotosRequest {
+  int32 PhotosCount = 1;
+}
+message SetDownloadPhotosResponse {
+  bool NNServiceRun = 1;
+  bool SuccessRun = 2;
+}
+
+message DownloadInfoResponse {
+  int32 NewAccounts = 1;
+  int32 UpdateAccounts = 2;
+  int32 SameAccounts = 3;
+  int32 MatchingAccounts = 4;
+  int32 PhotosNow = 5;
+  int32 CountOfDownloadedPhotos = 6;
+  int32 CountOfSamePhotos = 7;
+  int32 CountOfMissingPhotos = 8;
+  int32 MatchingNNPhotosCount = 9;
+  int32 ErrPhotosCount = 10;
+  bool  SuccessDownload = 11;
+  bool  RunDownload = 12;
+}
+
+message GetFaceDetectRunInfoResponse {
+  bool FaceDetectRun = 1;
+}
+
+message GetLoadingPhotosResponse {
+  bool TrueNew = 1;
+  bytes TruePhoto = 2;
+  bool FalseNew = 3;
+  bytes FalsePhoto = 4;
+}
+
+message DrawBoxRequest {
+  bool Set = 1;
+  bool DrawBox = 2;
+}
+message TrueFalse {
+  bool Boolean = 1;
+}
+
+message PassOrIgnoreRequest {
+  bool Set = 1;
+  bool Pass = 2;
+}
+message PassOrIgnoreResponse {
+  bool Pass = 1;
+}
+
+message SetLikeToNullLastNUsers {
+  int32 countLastUsers = 1;
+}
+
+message PossibilityDeleteLastLikes {
+  bool Possibility = 1;
+}
+
+message PredictUserRequest {
+  int32 UserId = 1;
+}
+
+message PredictUserResponse {
+  int32 UserId = 1;
+  float LikePercent = 2;
+  float DislikePercent = 3;
+}
+
+message TrainRequest {
+  int32 CountOfEpochs = 1;
+  bool AlignDS = 2;
+}
+
+message TrainResponse {
+  bool TrainingNow = 1;
+  int32 AllEpochCount = 2;
+  int32 AllBatchCount = 3;
+}
+
+message FitStatusResponse {
+  int32 Epoch = 1;
+  int32 Batch = 2;
+  bool Training = 3;
+}
+
+message AutoLikeResponse {
+  repeated bytes Photos = 1;
+  float LikePercent = 2;
+  float DislikePercent = 3;
+  bool SuccessAutoLike = 4;
+  bool ErrorAutoLike = 5;
+}
+
+message GetAutoLikeIsRunResponse {
+  bool AutoLikeRun = 1;
+  int32 LikedCount = 2;
+  int32 DislikedCount = 3;
+}
+
+message GetWeigthNameResponse {
+  string WeigthName = 1;
+}
+
+message LikeDislikeCountPhotosFromDBResponse {
+  int32 LikeCount = 1;
+  int32 DislikeCount = 2;
+}
+
+message GetTokenTutorialResponse {
+  bytes TokenTutorial = 1;
+}
+
+service GrpcService {
+  rpc GetToken(EmptyMessage) returns (GetTokenResponse) {}
+  rpc SetToken(SetTokenRequest) returns (SetTokenResponse) {}
+  rpc GetDownloadedInfoFromDB(EmptyMessage) returns (GetDownloadInfoFromDBResponse) {}
+  rpc GetUsers(GetUsersRequest) returns (GetUsersResponse) {}
+  rpc LikeDislike(LikeDislikeRequest) returns (EmptyMessage) {}
+  rpc SetDownloadPhotos(SetDownloadPhotosRequest) returns (SetDownloadPhotosResponse) {}
+  rpc StopDownload(EmptyMessage) returns (EmptyMessage) {}
+  rpc DrawBox(DrawBoxRequest) returns (TrueFalse) {}
+  rpc PassOrIgnore(PassOrIgnoreRequest) returns (PassOrIgnoreResponse) {}
+  rpc PredictUser(PredictUserRequest) returns (PredictUserResponse) {}
+  rpc DeleteLastLikes(SetLikeToNullLastNUsers) returns (EmptyMessage) {}
+  rpc GetPossibilityDeleteLastLikes(SetLikeToNullLastNUsers) returns (PossibilityDeleteLastLikes) {}
+  rpc DeleteAllLikes(EmptyMessage) returns (EmptyMessage) {}
+  rpc PermanentlyDeleteAllInfo(EmptyMessage) returns (EmptyMessage) {}
+  rpc LikeDislikeCountPhotosFromDB(EmptyMessage) returns (LikeDislikeCountPhotosFromDBResponse) {}
+  rpc GetTokenTutorial(EmptyMessage) returns (GetTokenTutorialResponse) {}
+
+  rpc StartTrain(TrainRequest) returns (TrainResponse) {}
+  rpc GetTrainingNow(EmptyMessage) returns (TrainResponse) {}
+  rpc GetWeigthName(EmptyMessage) returns (GetWeigthNameResponse) {}
+
+  rpc RunAutoLike(EmptyMessage) returns (EmptyMessage) {}
+  rpc StopAutoLike(EmptyMessage) returns (EmptyMessage) {}
+  rpc GetAutoLikeIsRun(EmptyMessage) returns (GetAutoLikeIsRunResponse) {}
+  
+  rpc StreamingDownloadInfo(EmptyMessage) returns (stream DownloadInfoResponse) {}
+  rpc StreamingGetFaceDetectRunInfo(EmptyMessage) returns (stream GetFaceDetectRunInfoResponse) {}
+  rpc StreamingGetLoadingPhotos(EmptyMessage) returns (stream GetLoadingPhotosResponse) {}
+  rpc StreamingTrainStatus(EmptyMessage) returns (stream FitStatusResponse) {} 
+
+  rpc StreamingAutoLike(EmptyMessage) returns (stream AutoLikeResponse) {}
+}

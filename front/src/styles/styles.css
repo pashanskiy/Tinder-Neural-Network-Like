@@ -1,0 +1,43 @@
+body, html {
+  background: radial-gradient(#e6e6e6, #a8a8a8) !important;
+  height: 100% !important;
+}
+
+.disableHighlight {
+    user-select: none;
+}
+
+.borderRadius {
+  border-radius: 10px;
+}
+
+.carouselDiv {
+  margin-left: auto;
+  margin-right: auto;
+  width: 40vh;
+}
+
+.carousel {
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+  border-radius: 10px;
+}
+
+/* carousel fix */
+.carousel .control-prev.control-arrow:before {
+  margin-right: 90%
+}
+
+.carousel .control-next.control-arrow:before {
+  margin-left: 90%
+}
+
+
+.carousel.carousel-slider .control-arrow {
+  width: 50%
+}
+
+.carousel.carousel-slider .control-arrow:hover {
+	background: rgba(0, 0, 0, 0);
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+
+}

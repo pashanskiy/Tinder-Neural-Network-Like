@@ -1,0 +1,9 @@
+golang, react
+protoc --go_out=./components --go_opt=paths=source_relative ./grpctransport/grpc.proto
+protoc --go-grpc_out=./components --go-grpc_opt=paths=source_relative ./grpctransport/grpc.proto
+protoc --plugin=protoc-gen-ts=./front/node_modules/.bin/protoc-gen-ts --js_out=import_style=commonjs,binary:./front/src/components/ --ts_out=service=grpc-web:./front/src/components ./grpctransport/grpc.proto
+
+golang, python
+protoc --go_out=./components --go_opt=paths=source_relative ./grpctransport/grpcnn.proto
+protoc --go-grpc_out=./components --go-grpc_opt=paths=source_relative ./grpctransport/grpcnn.proto
+python3 -m grpc_tools.protoc -I./grpctransport --python_out=./facedetect/grpctransport --grpc_python_out=./facedetect/grpctransport ./grpctransport/grpcnn.proto

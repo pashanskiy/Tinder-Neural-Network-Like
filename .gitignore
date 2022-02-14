@@ -1,0 +1,10 @@
+.vscode
+facedetect/faceDetect-venv
+facedetect/grpctransport/__pycache__
+front/node_modules
+front/dist/bundle.js
+front/dist/bundle.js.LICENSE.txt
+front/dist/bundle.js.map
+resources
+tnn
+.DS_Store
