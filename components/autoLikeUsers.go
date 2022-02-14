@@ -186,7 +186,7 @@ func AutoLike(db *sqlx.DB, grpcNNClient grpctransport.GrpcServiceNNClient, wgExi
 func sendLikeOrDislike(userId, token string, passOrIgnore, likeOrDislike bool) {
 	// Create client
 	client := &http.Client{}
-	_ = client
+	// _ = client //debug
 
 	if likeOrDislike {
 		req, err := http.NewRequest("POST", "https://api.gotinder.com/like/"+userId, nil)

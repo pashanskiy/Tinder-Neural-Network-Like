@@ -106,7 +106,7 @@ func HTTPServer(db *sqlx.DB) {
 	fmt.Println("Open browser:", localIPPORT)
 	fmt.Println("################## CLOSE APP: CTRL+C ##################")
 	time.Sleep(time.Second * 3)
-	// openbrowser("http://" + localIPPORT)
+	openbrowser("http://" + localIPPORT)
 	cancelProgram(&wgExit, httpServer, &appRun, downloadInfo, autoLikeInfo, grpcNNClient)
 }
 
