@@ -156,13 +156,12 @@ func AutoLike(db *sqlx.DB, grpcNNClient grpctransport.GrpcServiceNNClient, wgExi
 				// fmt.Println("len(autoLikedStreamBuffer)", len(autoLikedStreamBuffer))
 			}
 		} else {
-			fmt.Println("kek")
 			autoLikedStreamBuffer <- AutoLikedStreamBuffer{SuccessAutoLike: false}
 			autoLikeInfo.Mutex.Lock()
 			for !autoLikeInfo.StopAutoLike {
 				autoLikeInfo.Mutex.Unlock()
 				timeToNextBatch := 0
-				if timeToNextBatch > 10 {
+				if timeToNextBatch > 60 {
 					autoLikeInfo.Mutex.Lock()
 					break
 				}
@@ -214,7 +213,7 @@ func sendLikeOrDislike(userId, token string, passOrIgnore, likeOrDislike bool) {
 		}
 	}
 
-	// if likeOrDislike {
+	// if likeOrDislike { // debug
 	// 	fmt.Println("Liked")
 	// } else {
 	// 	fmt.Println("Disliked")
